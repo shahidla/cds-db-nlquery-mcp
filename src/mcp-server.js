@@ -8,7 +8,12 @@ const {
   ListToolsRequestSchema,
 } = require('@modelcontextprotocol/sdk/types.js');
 
-const cds = require('@sap/cds');
+// Resolve @sap/cds from the caller's CAP project root so their @sap/hana-client
+// and other platform-specific adapters are found. Falls back to local install.
+const cds = (() => {
+  try { return require(require.resolve('@sap/cds', { paths: [process.cwd()] })); }
+  catch { return require('@sap/cds'); }
+})();
 const { buildSchema, buildSchemaPrompt } = require('./schema-reader');
 const { planQuery }                      = require('./llm-planner');
 const { executeDescriptor }              = require('./query-executor');
@@ -19,8 +24,11 @@ let schema     = null; // populated once CDS model is loaded
 let schemaText = null;
 
 async function bootstrap() {
-  // Load the CDS model from the project in the current working directory.
-  // When this package is run via npx from a CAP project root, CDS finds db/ automatically.
+  // Load + link the CDS model from the project in the current working directory.
+  // cds.load() returns raw CSN (associations have type:'cds.Association' but no isAssociation flag).
+  // cds.linked() adds isAssociation/isComposition flags needed by schema-reader.
+  // Must set cds.model before cds.connect.to('db') so CDS registers cds.db as primary datasource.
+  cds.model = cds.linked(await cds.load('db'));
   await cds.connect.to('db');
   schema     = buildSchema(cds.model);
   schemaText = buildSchemaPrompt(schema);

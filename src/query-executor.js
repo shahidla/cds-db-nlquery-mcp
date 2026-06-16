@@ -1,5 +1,10 @@
 'use strict';
-const cds = require('@sap/cds');
+// Resolve @sap/cds from the caller's CAP project root so their @sap/hana-client
+// and other platform-specific adapters are found. Falls back to local install.
+const cds = (() => {
+  try { return require(require.resolve('@sap/cds', { paths: [process.cwd()] })); }
+  catch { return require('@sap/cds'); }
+})();
 
 function coerce(val, type) {
   if (type === 'Boolean') {
