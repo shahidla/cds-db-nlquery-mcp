@@ -27,10 +27,13 @@ function mapType(cdsType) {
 // Managed associations use col.keys: [{ref: ['PARTNER'], id: 'PARTNER'}]
 function deriveJoinKeys(col) {
   if (col.on && col.on.length >= 3) {
-    const lhs = col.on[0]; // {ref: ['alias', 'col']} or {ref: ['col']}
+    // CDS convention: on assocAlias.targetColumn = sourceColumn
+    //   lhs = {ref: ['assocAlias', 'targetColumn']} → the joined entity's PK  → "to"
+    //   rhs = {ref: ['sourceColumn']}               → this entity's FK         → "from"
+    const lhs = col.on[0];
     const rhs = col.on[2];
-    const fromKey = Array.isArray(lhs.ref) ? lhs.ref[lhs.ref.length - 1] : null;
-    const toKey   = Array.isArray(rhs.ref) ? rhs.ref[rhs.ref.length - 1] : null;
+    const toKey   = Array.isArray(lhs.ref) ? lhs.ref[lhs.ref.length - 1] : null;
+    const fromKey = Array.isArray(rhs.ref) ? rhs.ref[rhs.ref.length - 1] : null;
     if (fromKey && toKey) return { from: fromKey, to: toKey };
   }
   if (col.keys && col.keys.length > 0) {
