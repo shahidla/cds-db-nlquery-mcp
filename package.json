@@ -1,0 +1,37 @@
+{
+  "name": "@shahid/cds-db-nlquery-mcp",
+  "version": "0.1.0",
+  "description": "MCP server for natural language queries against CDS db-layer entities. Targets raw db/schema.cds entities via cds.run() — complements @gavdi/cap-mcp (OData service entities).",
+  "main": "src/mcp-server.js",
+  "bin": {
+    "cds-db-nlquery-mcp": "src/mcp-server.js"
+  },
+  "scripts": {
+    "start": "node src/mcp-server.js"
+  },
+  "keywords": [
+    "mcp",
+    "sap",
+    "cap",
+    "cds",
+    "hana",
+    "natural-language",
+    "nlquery",
+    "db-layer",
+    "model-context-protocol"
+  ],
+  "author": "Shahid",
+  "license": "MIT",
+  "engines": {
+    "node": ">=18"
+  },
+  "peerDependencies": {
+    "@sap/cds": ">=7"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.0.0"
+  },
+  "devDependencies": {
+    "@sap/cds": "^8"
+  }
+}
