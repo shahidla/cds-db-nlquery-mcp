@@ -1,170 +1,236 @@
 'use strict';
+
 // Resolve @sap/cds from the caller's CAP project root so their @sap/hana-client
-// and other platform-specific adapters are found. Falls back to local install.
+// and platform adapters are found. Falls back to local install.
 const cds = (() => {
   try { return require(require.resolve('@sap/cds', { paths: [process.cwd()] })); }
   catch { return require('@sap/cds'); }
 })();
 
-function coerce(val, type) {
-  if (type === 'Boolean') {
-    if (val === 'true'  || val === 1 || val === '1') return true;
-    if (val === 'false' || val === 0 || val === '0') return false;
-    return Boolean(val);
-  }
-  if (type === 'Decimal' || type === 'Integer') return parseFloat(val);
-  return val;
+// Build a CQN column ref from a column string ('COL' or 'assoc.COL' or 'a.b.COL').
+// CDS translates ref paths with length > 1 into SQL JOINs automatically.
+function colRef(colStr) {
+  return { ref: colStr.split('.') };
 }
 
-function applyConditions(rows, conditions, entityDef, joinEntityDef) {
-  if (!conditions?.length) return rows;
-  const today = new Date();
+function isoDate(d) { return d.toISOString().split('T')[0]; }
 
-  return rows.filter(row => conditions.every(({ col, op, val }) => {
-    let v, colType;
-    if (col.includes('.')) {
-      const [, colName] = col.split('.', 2);
-      v       = row[`__join__${colName}`] ?? row[colName];
-      colType = joinEntityDef?.columns[colName] || 'String';
-    } else {
-      v       = row[col];
-      colType = entityDef.columns[col] || joinEntityDef?.columns[col] || 'String';
+// Walks every path string (e.g. 'customer.dti.DTI_RATIO') and resolves every
+// association alias along the way to its target entity name, using the schema's
+// join metadata. Used to enforce the entity allowlist on JOINED entities too —
+// not just the top-level entity — closing a bypass where a disallowed entity
+// could be read via an association path instead of being queried directly.
+function collectJoinedEntities(paths, startEntityDef, schema) {
+  const entities = new Set();
+  for (const path of paths) {
+    const parts = path.split('.');
+    if (parts.length < 2) continue; // plain column, no join involved
+    let currentDef = startEntityDef;
+    for (let i = 0; i < parts.length - 1; i++) {
+      const join = currentDef?.joins?.[parts[i]];
+      if (!join) break; // unresolvable alias — query will fail later anyway
+      entities.add(join.entity);
+      currentDef = schema[join.entity];
     }
-
-    if (v === undefined || v === null) return false;
-
-    const cv = coerce(v,   colType);
-    const cw = coerce(val, colType);
-
-    switch (op) {
-      case '=':    return cv == cw;
-      case '!=':   return cv != cw;
-      case '>':    return cv  > cw;
-      case '<':    return cv  < cw;
-      case '>=':   return cv >= cw;
-      case '<=':   return cv <= cw;
-      case 'like': return String(v).toLowerCase().includes(String(val).toLowerCase());
-      case 'within_days': {
-        const d = new Date(v), future = new Date(today);
-        future.setDate(future.getDate() + parseInt(val));
-        return d >= today && d <= future;
-      }
-      case 'days_ago': {
-        const d = new Date(v), past = new Date(today);
-        past.setDate(past.getDate() - parseInt(val));
-        return d >= past && d <= today;
-      }
-      default: return true;
-    }
-  }));
+  }
+  return entities;
 }
 
 /**
- * Executes a query descriptor against the CDS db layer.
+ * Build a CQN WHERE predicate array from descriptor conditions.
+ * Supports association path refs ('assoc.COL') — CDS generates SQL JOINs for them.
+ * Multiple conditions are AND-ed together.
+ *
+ * Returns a flat CQN expression array compatible with SELECT.where([...]).
+ */
+function buildWhereExpr(conditions) {
+  if (!conditions?.length) return null;
+  const today = new Date();
+
+  const parts = conditions.map(({ col, op, val, valCol }) => {
+    const ref = colRef(col);
+    // valCol compares against another column instead of a literal (e.g. comparing
+    // collateral.VALUE against AMOUNT on the same query) — CDS resolves it as a
+    // normal path ref, generating a join the same way the main column would.
+    const rhs = valCol ? colRef(valCol) : { val };
+
+    switch (op) {
+      case 'within_days': {
+        const d0 = isoDate(today);
+        const d1 = isoDate(new Date(today.getTime() + Number(val) * 86400000));
+        return [ref, '>=', { val: d0 }, 'and', ref, '<=', { val: d1 }];
+      }
+      case 'days_ago': {
+        const d0 = isoDate(new Date(today.getTime() - Number(val) * 86400000));
+        const d1 = isoDate(today);
+        return [ref, '>=', { val: d0 }, 'and', ref, '<=', { val: d1 }];
+      }
+      case 'like':
+        // Genuinely case-insensitive — HANA's LIKE is case-sensitive by default,
+        // so wrap both sides in UPPER() rather than relying on collation settings.
+        return [{ func: 'upper', args: [ref] }, 'like', { val: `%${String(val).toUpperCase()}%` }];
+      default:
+        return [ref, op, rhs];
+    }
+  });
+
+  if (parts.length === 1) return parts[0];
+
+  // Join individual predicates with 'and'
+  const result = [];
+  for (let i = 0; i < parts.length; i++) {
+    if (i > 0) result.push('and');
+    result.push(...parts[i]);
+  }
+  return result;
+}
+
+/**
+ * Execute a query descriptor against the CDS db layer.
+ *
+ * Architecture: single cds.run() with CDS association path expressions.
+ * CDS translates 'assoc.COL' paths into real SQL JOINs in HANA — no JavaScript
+ * merging, no separate SELECT per entity, no post-fetch filtering.
+ * WHERE conditions and LIMIT are pushed to HANA SQL — scales to billions of rows.
  *
  * Descriptor shape:
- *   entity    — short entity name (must be in schema)
- *   join      — join alias name (from entity's joins map) or null
- *   select    — column list, e.g. ['PARTNER', 'joinAlias.BU_SORT1'] or null (all)
- *   where     — [{ col, op, val }] conditions; col may be 'joinAlias.COL'
- *   orderBy   — column name or null
+ *   entity    — entity short name (must be in schema)
+ *   select    — columns, supports paths: ['PARTNER', 'customer.BU_SORT1', 'customer.dti.DTI_RATIO']
+ *   where     — [{ col, op, val }]; col may be 'assoc.COL' for cross-entity conditions
+ *   orderBy   — column or 'assoc.COL'
  *   orderDir  — 'ASC' | 'DESC'
- *   limit     — max rows to return (default 50)
+ *   limit     — rows requested (capped by server maxRows, enforced at SQL LIMIT)
  *
- * One-to-many joins are handled correctly: a main row with N matching join rows
- * produces N result rows (unlike the Map-overwrite approach which kept only 1).
+ * callConfig (per-call input param overrides — merged with server config):
+ *   allowedEntities — restrict queryable entities for this call (intersects with server list)
+ *   blockedColumns  — additional columns to strip for this call (unions with server list)
+ *   maxRows         — lower the row cap for this call
  */
-async function executeDescriptor(descriptor, schema) {
-  const { entity, join: joinAlias, select, where, orderBy, orderDir, limit = 50 } = descriptor;
+async function executeDescriptor(descriptor, schema, callConfig = {}) {
+  const {
+    entity,
+    select,
+    where,
+    orderBy, orderDir,
+    limit: rawLimit = 50,
+  } = descriptor;
+
+  const serverCfg = require('./config');
+
+  // ── Access control ──────────────────────────────────────────────────────────
+
+  const serverAllowed = serverCfg.allowedEntities;   // [] = no restriction (all allowed)
+  const callAllowed   = callConfig.allowedEntities || [];
+
+  if (serverAllowed.length > 0 && !serverAllowed.includes(entity)) {
+    throw new Error(
+      `Entity "${entity}" is not accessible. ` +
+      `Allowed (server): ${serverAllowed.join(', ')}. ` +
+      `Update MCP_ALLOWED_ENTITIES in .mcp.json to add it.`
+    );
+  }
+  if (callAllowed.length > 0 && !callAllowed.includes(entity)) {
+    throw new Error(`Entity "${entity}" is not in the per-call allowed_entities list`);
+  }
 
   const entityDef = schema[entity];
   if (!entityDef) {
     throw new Error(`Unknown entity "${entity}". Known: ${Object.keys(schema).join(', ')}`);
   }
 
-  let joinDef       = null;
-  let joinEntityDef = null;
-
-  if (joinAlias) {
-    joinDef = entityDef.joins?.[joinAlias];
-    if (!joinDef) {
-      throw new Error(`No join "${joinAlias}" on "${entity}". Valid: ${Object.keys(entityDef.joins || {}).join(', ')}`);
+  // Enforce the allowlist on entities reached via association-path joins too —
+  // e.g. querying "BCA_DTI" but selecting "customer.BU_SORT1" reads BusinessPartners,
+  // which must independently pass the same allowlist check as the top-level entity.
+  const allPaths = [
+    ...(select || []),
+    ...(where || []).flatMap(w => w.valCol ? [w.col, w.valCol] : [w.col]),
+    ...(orderBy ? [orderBy] : []),
+  ];
+  const joinedEntities = collectJoinedEntities(allPaths, entityDef, schema);
+  for (const joined of joinedEntities) {
+    if (serverAllowed.length > 0 && !serverAllowed.includes(joined)) {
+      throw new Error(
+        `Entity "${joined}" (reached via association join) is not accessible. ` +
+        `Allowed (server): ${serverAllowed.join(', ')}.`
+      );
     }
-    joinEntityDef = schema[joinDef.entity];
-    if (!joinEntityDef) throw new Error(`Join target "${joinDef.entity}" not in schema`);
-  }
-
-  // Fetch main entity rows
-  let rows = await cds.run(SELECT.from(entityDef.fqn).limit(500));
-
-  // Merge join (correct one-to-many: group join rows by key → flatMap)
-  if (joinDef && joinEntityDef) {
-    const joinRows = await cds.run(SELECT.from(joinEntityDef.fqn).limit(500));
-
-    // Group join rows by the "to" key — preserves all matches (fixes overwrite bug)
-    const joinMap = new Map();
-    for (const r of joinRows) {
-      const k = r[joinDef.to];
-      if (!joinMap.has(k)) joinMap.set(k, []);
-      joinMap.get(k).push(r);
+    if (callAllowed.length > 0 && !callAllowed.includes(joined)) {
+      throw new Error(`Entity "${joined}" (reached via association join) is not in the per-call allowed_entities list`);
     }
-
-    const isInner = joinDef.type === 'INNER';
-
-    rows = rows.flatMap(row => {
-      const matches = joinMap.get(row[joinDef.from]) || [];
-      if (matches.length === 0) {
-        return isInner ? [] : [row]; // INNER drops unmatched; LEFT keeps them
-      }
-      // Each match becomes a separate result row (correct one-to-many behaviour)
-      return matches.map(matched => {
-        const merged = { ...row };
-        for (const [k, v] of Object.entries(matched)) {
-          merged[`__join__${k}`] = v;
-          if (!(k in row)) merged[k] = v; // non-colliding columns promoted
-        }
-        return merged;
-      });
-    });
   }
 
-  // Apply WHERE conditions post-join (cross-entity conditions work correctly here)
-  rows = applyConditions(rows, where, entityDef, joinEntityDef);
+  // ── Row cap — enforced at SQL LIMIT, not post-fetch ─────────────────────────
 
-  // Sort
-  if (orderBy) {
-    const dir = orderDir === 'DESC' ? -1 : 1;
-    rows.sort((a, b) => {
-      const av = a[orderBy] ?? a[`__join__${orderBy}`];
-      const bv = b[orderBy] ?? b[`__join__${orderBy}`];
-      if (av == null) return 1;
-      if (bv == null) return -1;
-      return (av > bv ? 1 : av < bv ? -1 : 0) * dir;
-    });
-  }
+  const callMax      = callConfig.maxRows || Infinity;
+  const effectiveLimit = Math.min(rawLimit, serverCfg.maxRows, callMax);
 
-  // Column projection — resolve 'alias.COL' refs, strip __join__ internals
-  let result = rows.slice(0, limit);
+  // ── Column blocklist — union of server + per-call ────────────────────────────
+
+  const allBlocked = new Set([
+    ...serverCfg.blockedColumns,
+    ...(callConfig.blockedColumns || []),
+  ]);
+
+  // ── Build CQN column refs ───────────────────────────────────────────────────
+  // Strip blocked columns at the source (before sending to HANA)
+  // Path refs like { ref: ['customer', 'BU_SORT1'] } → CDS generates a SQL JOIN
+
+  let cols = null;
   if (select?.length) {
-    result = result.map(row => {
-      const out = {};
-      for (const col of select) {
-        if (col.includes('.')) {
-          const [, colName] = col.split('.', 2);
-          out[colName] = row[`__join__${colName}`] ?? row[colName];
-        } else {
-          out[col] = row[col];
+    const filtered = select.filter(c => !allBlocked.has(c.split('.').pop()));
+    cols = filtered.map(colRef);
+  } else if (allBlocked.size > 0) {
+    // No explicit select ("all columns") but some columns are blocked. Without this,
+    // the query would fall through to SELECT * — fetching blocked columns (e.g.
+    // EMBEDDING, PASSWORD) from HANA over the wire before stripping them post-fetch.
+    // Build an explicit allowed-column list instead so blocked columns are never
+    // sent to HANA at all.
+    const allowedCols = Object.keys(entityDef.columns).filter(c => !allBlocked.has(c));
+    cols = allowedCols.map(colRef);
+  }
+
+  // ── Build single CDS query ──────────────────────────────────────────────────
+
+  const q = SELECT.from(entityDef.fqn);
+  if (cols?.length) q.columns(...cols);
+
+  const whereExpr = buildWhereExpr(where);
+  if (whereExpr) q.where(whereExpr);
+
+  if (orderBy) {
+    q.orderBy([{ ...colRef(orderBy), sort: (orderDir || 'ASC').toLowerCase() }]);
+  }
+
+  q.limit(effectiveLimit);   // single SQL LIMIT — HANA enforces it, not Node.js
+
+  let rows = await cds.run(q);
+
+  // Translate enum raw values back to business terms (same mechanism Fiori uses for
+  // coded value display) — e.g. STATUS: "C" also gets STATUS_text: "closed" alongside it.
+  // Raw value is kept as-is; the _text sibling is additive, never replaces it.
+  const enumCols = Object.entries(entityDef.columns).filter(([, meta]) => meta.enum);
+  if (enumCols.length > 0) {
+    rows = rows.map(row => {
+      const out = { ...row };
+      for (const [col, meta] of enumCols) {
+        if (col in out && meta.enum[out[col]]) {
+          out[`${col}_text`] = meta.enum[out[col]];
         }
       }
       return out;
     });
-  } else {
-    result = result.map(row =>
-      Object.fromEntries(Object.entries(row).filter(([k]) => !k.startsWith('__join__')))
-    );
   }
 
-  return result;
+  // Belt-and-suspenders: strip blocked columns from result rows (catches * selects)
+  if (allBlocked.size > 0) {
+    return rows.map(row => {
+      const out = { ...row };
+      for (const col of allBlocked) delete out[col];
+      return out;
+    });
+  }
+
+  return rows;
 }
 
 module.exports = { executeDescriptor };

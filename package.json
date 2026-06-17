@@ -1,11 +1,14 @@
 {
   "name": "@shahid/cds-db-nlquery-mcp",
-  "version": "0.1.0",
-  "description": "MCP server for natural language queries against CDS db-layer entities. Targets raw db/schema.cds entities via cds.run() — complements @gavdi/cap-mcp (OData service entities).",
+  "version": "0.5.0",
+  "description": "MCP server for natural language queries against CDS db-layer entities. Targets raw db/schema.cds entities via cds.run() with real SQL JOINs — bring your own LLM (Anthropic, OpenAI, or any OpenAI-compatible endpoint).",
   "main": "src/mcp-server.js",
   "bin": {
     "cds-db-nlquery-mcp": "src/mcp-server.js"
   },
+  "files": [
+    "src/"
+  ],
   "scripts": {
     "start": "node src/mcp-server.js"
   },
@@ -29,7 +32,9 @@
     "@sap/cds": ">=7"
   },
   "dependencies": {
-    "@modelcontextprotocol/sdk": "^1.0.0"
+    "@modelcontextprotocol/sdk": "^1.0.0",
+    "@anthropic-ai/sdk": "^0.32.0",
+    "openai": "^4.70.0"
   },
   "devDependencies": {
     "@sap/cds": "^8"

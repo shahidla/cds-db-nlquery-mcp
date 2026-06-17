@@ -52,8 +52,30 @@ function deriveJoinKeys(col) {
  *   columns — { ColName: 'String'|'Boolean'|'Decimal'|'Integer'|'Date' }
  *   joins   — { alias: { entity, from, to, type: 'INNER'|'LEFT' } }
  */
+// Entities are addressed by short name (e.g. "Loans") for ergonomics — but in a
+// namespaced CAP project, two entities in different namespaces can share a short
+// name (e.g. "sales.Order" and "support.Order"). Silently keying by short name
+// would let the second one overwrite the first. Count occurrences up front so
+// colliding entities fall back to their fully-qualified name instead — safe by
+// default, only verbose where it's actually needed.
+function countShortNames(cdsModel) {
+  const counts = {};
+  for (const [fqn, def] of Object.entries(cdsModel.definitions)) {
+    if (def.kind !== 'entity') continue;
+    if (fqn.startsWith('sap.') || fqn.startsWith('DRAFT.')) continue;
+    const shortName = fqn.split('.').pop();
+    counts[shortName] = (counts[shortName] || 0) + 1;
+  }
+  return counts;
+}
+
 function buildSchema(cdsModel) {
   const schema = {};
+  const shortNameCounts = countShortNames(cdsModel);
+  const keyFor = fqn => {
+    const shortName = fqn.split('.').pop();
+    return shortNameCounts[shortName] > 1 ? fqn : shortName;
+  };
 
   for (const [fqn, def] of Object.entries(cdsModel.definitions)) {
     if (def.kind !== 'entity') continue;
@@ -65,9 +87,9 @@ function buildSchema(cdsModel) {
 
     for (const [colName, col] of Object.entries(def.elements || {})) {
       if (col.isAssociation || col.isComposition) {
-        const targetFqn  = col.target || '';
-        const targetShort = targetFqn.split('.').pop();
-        const keys       = deriveJoinKeys(col);
+        const targetFqn   = col.target || '';
+        const targetKey   = keyFor(targetFqn);
+        const keys        = deriveJoinKeys(col);
         if (!keys) continue; // skip if we can't resolve join keys
 
         // Cardinality: to-many → LEFT (optional rows), to-one → INNER (guaranteed)
@@ -75,16 +97,43 @@ function buildSchema(cdsModel) {
         const joinType = col['@NLP.joinType'] || (toMany ? 'LEFT' : 'INNER');
         const alias    = col['@NLP.alias']    || colName;
 
-        joins[alias] = { entity: targetShort, from: keys.from, to: keys.to, type: joinType };
+        joins[alias] = { entity: targetKey, from: keys.from, to: keys.to, type: joinType };
 
       } else if (col.type && !col.virtual) {
-        columns[colName] = mapType(col.type);
+        // @NLP.label takes precedence (room for disambiguation text), falls back to
+        // the standard CDS @title annotation (e.g. already used for Fiori labels).
+        const meta = { type: mapType(col.type), label: col['@NLP.label'] || col['@title'] || null };
+
+        // Native CDS enum (e.g. `STATUS : String(1) enum { active = 'A'; closed = 'C'; }`)
+        // — the same SAP-standard mechanism Fiori uses for value help / coded dropdowns.
+        // Captured as { rawValue: symbolicName } so the LLM knows both the business term
+        // and the exact raw value to use in filters, and the executor can translate
+        // raw codes back to business terms in the result rows.
+        if (col.enum) {
+          meta.enum = {};
+          for (const [symbolicName, valueDef] of Object.entries(col.enum)) {
+            meta.enum[valueDef.val] = symbolicName;
+          }
+        }
+
+        // @Common.Text — SAP-standard pattern for LARGE code lists (hundreds of values),
+        // where enum (compile-time fixed set) doesn't scale. Points through an association
+        // to a text field on a separate code/lookup entity, e.g. `status.TEXT`. We don't
+        // translate this ourselves — we tell the LLM the path exists so it can include it
+        // in `select` via the normal association path mechanism (real SQL JOIN, no new code).
+        const textRef = col['@Common.Text'];
+        if (textRef && typeof textRef === 'object' && textRef['=']) {
+          meta.textVia = textRef['='];
+        }
+
+        columns[colName] = meta;
         if (col.key) key = colName;
       }
     }
 
-    const shortName = fqn.split('.').pop();
-    schema[shortName] = {
+    const shortName  = fqn.split('.').pop();
+    const entityKey  = keyFor(fqn);
+    schema[entityKey] = {
       label:   def['@NLP.label'] || def['@title'] || shortName,
       key:     key || 'ID',
       fqn,
@@ -96,11 +145,29 @@ function buildSchema(cdsModel) {
   return schema;
 }
 
+/** True if any entity short name collides with another entity in a different namespace. */
+function hasNameCollisions(cdsModel) {
+  return Object.values(countShortNames(cdsModel)).some(n => n > 1);
+}
+
 /** Compact text representation of the schema for the LLM prompt */
 function buildSchemaPrompt(schema) {
   const lines = [];
   for (const [name, def] of Object.entries(schema)) {
-    const cols  = Object.entries(def.columns).map(([c, t]) => `${c}:${t}`).join(', ');
+    const cols  = Object.entries(def.columns)
+      .map(([c, meta]) => {
+        let s = `${c}:${meta.type}`;
+        if (meta.label) s += `["${meta.label}"]`;
+        if (meta.enum) {
+          const pairs = Object.entries(meta.enum).map(([val, name]) => `${name}="${val}"`).join(',');
+          s += `{values: ${pairs} — use the raw value in filters}`;
+        }
+        if (meta.textVia) {
+          s += `{readable text available via "${meta.textVia}" — include it in select to show the human-readable value}`;
+        }
+        return s;
+      })
+      .join(', ');
     const joins = Object.entries(def.joins || {})
       .map(([alias, j]) => `"${alias}"→${j.entity}(${j.from}=${j.to},${j.type})`)
       .join(', ');
@@ -111,4 +178,4 @@ function buildSchemaPrompt(schema) {
   return lines.join('\n');
 }
 
-module.exports = { buildSchema, buildSchemaPrompt };
+module.exports = { buildSchema, buildSchemaPrompt, hasNameCollisions };
