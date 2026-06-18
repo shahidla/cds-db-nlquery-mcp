@@ -34,6 +34,34 @@ Here's how it works, why it's architected this way, and three real examples agai
 
 ---
 
+## How It Works, At a Glance
+
+```
+ Your question (plain English)
+        │
+        ▼
+ ┌────────────────────────┐
+ │ Stage 1 — LLM           │  reads your CDS schema (labels, associations,
+ │ Question → Descriptor   │  @Common.Text, enums) → outputs JSON only:
+ └─────────┬───────────────┘  { entity, select, where, valCol, limit }
+           │  JSON descriptor
+           ▼
+ ┌────────────────────────┐
+ │ Stage 2 — CDS           │  descriptor → CQN → real SQL JOINs,
+ │ Descriptor → SQL        │  generated from association metadata —
+ └─────────┬───────────────┘  not guessed by the LLM
+           │  rows from HANA
+           ▼
+ ┌────────────────────────┐
+ │ Stage 3 — Answer        │  MCP client renders the rows, or hands them
+ │ Rows → Plain English    │  to a second LLM call to phrase the answer
+ └────────────────────────┘
+
+   The LLM never touches SQL. CDS never touches your question.
+```
+
+---
+
 ## Why This Isn't "LLM Writes SQL"
 
 Most natural-language-to-SQL demos work the same way: dump the whole database schema into a prompt, ask the LLM to write SQL, run whatever comes back. That's fast to build and brittle to run — the LLM has to get table names, JOIN syntax, and HANA-specific SQL right in one shot, with no framework checking its work.
@@ -391,15 +419,19 @@ This is the example I'd point a skeptical architect to first. Plenty of "NL to S
 
 ---
 
-## What the Server Actually Reads From Your CDS Model
+## What Happens When the LLM Gets It Wrong
 
-Everything above comes from five things already in your schema, none of them new:
+All three examples above are success cases — worth being honest about the failure path too. If the LLM's response doesn't parse as JSON, or comes back without an `entity` field, the server rejects it outright rather than guessing or silently running a degraded query. The same applies to an entity or column outside `MCP_ALLOWED_ENTITIES`, or one that doesn't exist in your schema at all — each produces a clear error back to the MCP client, not a best-effort result you'd have to double-check. There's no fallback path that quietly does something different from what you asked.
+
+---
+
+## What Else the Server Reads From Your CDS Model
+
+Beyond `@title`/`@NLP.label` (covered above), three more things already in your schema do the rest of the work, none of them new:
 
 - **Associations** — drive every JOIN; cardinality (`to-many` vs `to-one`) decides `LEFT` vs `INNER` automatically.
 - **`@Common.Text`** — the standard value-help pattern, reused so the LLM filters on human text instead of guessing codes.
 - **Enums** — native CDS `enum` values are surfaced to the LLM as `name="value"` pairs, and translated back (`STATUS_text`) in results.
-- **`@title`** — reused automatically; it's already there for Fiori, so it's free disambiguation here too.
-- **`@NLP.label`** — the one annotation this package adds, for the cases `@title` doesn't cover.
 
 This is why it doesn't feel like a generic SQL wrapper bolted onto your project: it's reading the same metadata your CDS model already carries for OData, Fiori value-help, and UI labels — just pointed at a different consumer.
 

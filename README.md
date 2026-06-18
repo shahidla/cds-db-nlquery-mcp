@@ -2,7 +2,7 @@
 
 MCP server for natural language queries against **CDS db-layer entities** (`db/schema.cds`).
 
-Ask questions about your database in plain English. The server discovers your schema automatically, generates real SQL JOINs using CDS, and returns rows — no hardcoded queries, no SQL, no schema configuration. Bring your own LLM — Anthropic, OpenAI, Gemini, or any OpenAI-compatible provider.
+Ask questions about your database in plain English. The server discovers your schema automatically, generates real SQL JOINs using CDS, and returns rows — no hardcoded queries, no SQL, no schema configuration. Bring your own LLM — Anthropic or OpenAI, or any OpenAI-compatible endpoint (Azure OpenAI, Groq, Ollama, local models, etc.).
 
 > **Targets the `db/` layer, not OData services.** If your entities are exposed as OData services, use an MCP package that targets the service layer instead.
 
