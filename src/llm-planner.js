@@ -22,9 +22,15 @@ DESCRIPTOR FORMAT:
 }
 
 Comparing two columns instead of a column to a fixed value (e.g. "collateral worth
-less than the loan amount"): use "valCol" instead of "val" —
-{ "col": "collateral.VALUE", "op": "<", "valCol": "AMOUNT" } — both sides can be
-association paths.
+less than the loan it secures"): use "valCol" instead of "val". Both sides can be
+plain columns or association paths, but they must both be reachable as paths FROM
+the entity you choose as "entity" — pick "entity" by checking the schema's "assoc:"
+list for whichever side gives you a path to the other. For example, if a
+"Collateral" entity has an association to "Loan" (e.g. "loan"), but "Loan" has no
+association back to "Collateral", you must start from "Collateral":
+{ "entity": "Collateral", "select": [...], "where": [{ "col": "VALUE", "op": "<", "valCol": "loan.AMOUNT" }] }
+— NOT from "Loan" (it has no path to collateral, so don't invent one or substitute
+an unrelated column).
 
 JOINS — use association path expressions, no "join" field needed:
   - To access a related entity's column: "assocAlias.COLUMN" in select or where
@@ -51,6 +57,7 @@ RULES:
 9. Do NOT add extra filters, conditions, joins, or business assumptions that the user did not ask for. Prefer the minimum query that answers the question.
 10. Words like "active", "closed", or "expired" usually describe a status value only. Do NOT infer overdue payments, arrears, missed instalments, dunning, or delinquency unless the question explicitly asks for them.
 11. If the question asks for "active loans with customer name and loan amount", that means filter loan status to active and select the customer name and loan amount. It does NOT imply any payment-status filter such as payments.DAYS_OVERDUE > 0.
+12. Before picking "entity", check that every column/path you plan to use in select/where/orderBy is actually reachable from it via that entity's own "assoc:" list (directly, or hop by hop). If a needed column lives on an entity that only has an association TO your candidate entity (not FROM it), start from that other entity instead — never invent an association alias that isn't listed, and never substitute an unrelated column when the right path doesn't exist on your first choice of entity.
 
 SCHEMA:
 ${schemaText}`;

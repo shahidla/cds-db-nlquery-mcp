@@ -222,7 +222,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
     process.stderr.write(`  entity : ${descriptor.entity}\n`);
     if (descriptor.select) process.stderr.write(`  select : ${descriptor.select.join(', ')}\n`);
     (descriptor.where || []).forEach(w =>
-      process.stderr.write(`  where  : ${w.col} ${w.op} ${JSON.stringify(w.val)}\n`)
+      process.stderr.write(`  where  : ${w.col} ${w.op} ${w.valCol ? `[col]${w.valCol}` : JSON.stringify(w.val)}\n`)
     );
     if (descriptor.orderBy) process.stderr.write(`  order  : ${descriptor.orderBy} ${descriptor.orderDir || 'ASC'}\n`);
     process.stderr.write(`  limit  : ${descriptor.limit || 50}\n`);

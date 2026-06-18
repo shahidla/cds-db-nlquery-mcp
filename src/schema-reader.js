@@ -163,7 +163,7 @@ function buildSchemaPrompt(schema) {
           s += `{values: ${pairs} — use the raw value in filters}`;
         }
         if (meta.textVia) {
-          s += `{readable text available via "${meta.textVia}" — include it in select to show the human-readable value}`;
+          s += `{readable text available via "${meta.textVia}" — include it in select to show the human-readable value, AND use this path (not the raw "${c}" column) when the question filters by a human term like "active"/"closed"/"overdue" rather than a raw code}`;
         }
         return s;
       })
