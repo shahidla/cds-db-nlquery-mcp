@@ -1,6 +1,6 @@
 {
   "name": "@shahid.la/cds-db-nlquery-mcp",
-  "version": "0.5.1",
+  "version": "0.5.2",
   "description": "MCP server for natural language queries against CDS db-layer entities. Targets raw db/schema.cds entities via cds.run() with real SQL JOINs — bring your own LLM (Anthropic, OpenAI, or any OpenAI-compatible endpoint).",
   "main": "src/mcp-server.js",
   "bin": {
