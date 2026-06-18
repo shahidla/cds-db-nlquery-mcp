@@ -48,6 +48,9 @@ RULES:
 6. Return ONLY the JSON object — no markdown fences, no explanation, no comments.
 7. Never select the same leaf column name twice (e.g. avoid selecting LOAN_ID and assocAlias.LOAN_ID in the same query — pick one).
 8. If a column's schema entry says "readable text available via X" (a @Common.Text value-help column) and the question refers to the value by its human meaning (e.g. "active", "closed", "expired") rather than a raw code you already know, do NOT guess the raw code. Instead filter on the text association path directly using "like", e.g. {"col": "status.TEXT", "op": "like", "val": "Active"} — this is reliable regardless of what the underlying raw code actually is.
+9. Do NOT add extra filters, conditions, joins, or business assumptions that the user did not ask for. Prefer the minimum query that answers the question.
+10. Words like "active", "closed", or "expired" usually describe a status value only. Do NOT infer overdue payments, arrears, missed instalments, dunning, or delinquency unless the question explicitly asks for them.
+11. If the question asks for "active loans with customer name and loan amount", that means filter loan status to active and select the customer name and loan amount. It does NOT imply any payment-status filter such as payments.DAYS_OVERDUE > 0.
 
 SCHEMA:
 ${schemaText}`;
