@@ -178,7 +178,26 @@ async function executeDescriptor(descriptor, schema, callConfig = {}) {
   let cols = null;
   if (select?.length) {
     const filtered = select.filter(c => !allBlocked.has(c.split('.').pop()));
-    cols = filtered.map(colRef);
+
+    // The LLM is told (rule 7) never to select the same leaf column name twice
+    // (e.g. "CURRENCY" via the top-level entity AND via "loan.CURRENCY"), but a
+    // cheap model occasionally does it anyway — HANA then rejects the query with
+    // "Duplicate column names". Rather than depend on prompt compliance, alias any
+    // joined-path column (length > 1) whose leaf name collides with another
+    // selected column, so the query is always valid regardless of what the LLM did.
+    const leafCounts = {};
+    for (const c of filtered) {
+      const leaf = c.split('.').pop();
+      leafCounts[leaf] = (leafCounts[leaf] || 0) + 1;
+    }
+    cols = filtered.map(c => {
+      const parts = c.split('.');
+      const leaf = parts[parts.length - 1];
+      if (leafCounts[leaf] > 1 && parts.length > 1) {
+        return { ref: parts, as: parts.join('_') };
+      }
+      return colRef(c);
+    });
   } else if (allBlocked.size > 0) {
     // No explicit select ("all columns") but some columns are blocked. Without this,
     // the query would fall through to SELECT * — fetching blocked columns (e.g.
