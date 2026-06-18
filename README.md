@@ -1,4 +1,4 @@
-# @shahid/cds-db-nlquery-mcp
+# @shahid.la/cds-db-nlquery-mcp
 
 MCP server for natural language queries against **CDS db-layer entities** (`db/schema.cds`).
 
@@ -24,7 +24,7 @@ Ask questions about your database in plain English. The server discovers your sc
 **1. Install in your CAP project**
 
 ```bash
-npm install @shahid/cds-db-nlquery-mcp
+npm install @shahid.la/cds-db-nlquery-mcp
 ```
 
 **2. Create `.mcp.json` in your CAP project root** (same folder as `package.json`)
@@ -34,7 +34,7 @@ npm install @shahid/cds-db-nlquery-mcp
   "mcpServers": {
     "cds-db-nlquery": {
       "command": "npx",
-      "args": ["-y", "@shahid/cds-db-nlquery-mcp"],
+      "args": ["-y", "@shahid.la/cds-db-nlquery-mcp"],
       "cwd": "/absolute/path/to/your/cap/project",
       "env": {
         "ANTHROPIC_API_KEY": "sk-ant-..."
@@ -90,7 +90,7 @@ All configuration is via environment variables in the `.mcp.json` `env` block.
   "mcpServers": {
     "cds-db-nlquery": {
       "command": "npx",
-      "args": ["-y", "@shahid/cds-db-nlquery-mcp"],
+      "args": ["-y", "@shahid.la/cds-db-nlquery-mcp"],
       "cwd": "/path/to/your/cap/project",
       "env": {
         "ANTHROPIC_API_KEY": "sk-ant-...",

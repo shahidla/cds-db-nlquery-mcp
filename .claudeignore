@@ -1,0 +1,54 @@
+# === Dependencies ===
+node_modules/
+**/node_modules/
+.venv/
+venv/
+env/
+__pycache__/
+.pytest_cache/
+
+# === Build / output ===
+dist/
+build/
+.next/
+out/
+target/
+*.egg-info/
+*.pyc
+*.pyo
+
+# === SAP CAP generated ===
+gen/
+srv/gen/
+db/gen/
+.cds-services.json
+*.cds-ts
+*.cds-js
+
+# === BTP / Vercel / deploy artifacts ===
+.vercel/
+.btp/
+mta_archives/
+*.mtar
+
+# === Data / large files ===
+*.xlsx
+*.xls
+~$*.xlsx
+*.csv
+*.parquet
+*.sqlite
+*.db
+
+# === Logs ===
+*.log
+logs/
+
+# === Coverage / test output ===
+coverage/
+.jest-cache/
+test-results/
+
+# === Misc ===
+.DS_Store
+*.tmp

@@ -30,6 +30,18 @@ async function bootstrap() {
   // cds.model must be set before cds.connect.to('db') so cds.db registers correctly.
   cds.model = cds.linked(await cds.load(serverConfig.modelPath));
 
+  // Fail loudly on a half-configured restricted-user setup rather than silently
+  // falling back to the consumer app's full-access connection — a partially set
+  // MCP_DB_USER/MCP_DB_PASSWORD (typo, missing secret) must never degrade into
+  // "use the unrestricted default" without the operator noticing.
+  if (Boolean(serverConfig.dbUser) !== Boolean(serverConfig.dbPassword)) {
+    throw new Error(
+      'MCP_DB_USER and MCP_DB_PASSWORD must both be set, or neither. ' +
+      'Only one was provided — refusing to start rather than silently falling back ' +
+      'to the default (likely full-access) database connection.'
+    );
+  }
+
   if (serverConfig.dbUser && serverConfig.dbPassword) {
     // Connect with a different (ideally restricted, read-only) user than the
     // consumer app's own runtime user — reuse host/port/schema from the project's
