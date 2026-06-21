@@ -36,53 +36,79 @@ function collectJoinedEntities(paths, startEntityDef, schema) {
   return entities;
 }
 
+// Builds the flat token array for a single leaf condition (no any/all nesting).
+// e.g. [ref, '=', {val}], or a multi-token 'and' pair for within_days/days_ago.
+function buildLeafTokens({ col, op, val, valCol }) {
+  const today = new Date();
+  const ref = colRef(col);
+  // valCol compares against another column instead of a literal (e.g. comparing
+  // collateral.VALUE against AMOUNT on the same query) — CDS resolves it as a
+  // normal path ref, generating a join the same way the main column would.
+  const rhs = valCol ? colRef(valCol) : { val };
+
+  switch (op) {
+    case 'within_days': {
+      const d0 = isoDate(today);
+      const d1 = isoDate(new Date(today.getTime() + Number(val) * 86400000));
+      return [ref, '>=', { val: d0 }, 'and', ref, '<=', { val: d1 }];
+    }
+    case 'days_ago': {
+      const d0 = isoDate(new Date(today.getTime() - Number(val) * 86400000));
+      const d1 = isoDate(today);
+      return [ref, '>=', { val: d0 }, 'and', ref, '<=', { val: d1 }];
+    }
+    case 'like':
+      // Genuinely case-insensitive — HANA's LIKE is case-sensitive by default,
+      // so wrap both sides in UPPER() rather than relying on collation settings.
+      return [{ func: 'upper', args: [ref] }, 'like', { val: `%${String(val).toUpperCase()}%` }];
+    default:
+      return [ref, op, rhs];
+  }
+}
+
+// Joins an array of token-arrays with a boolean operator: [a] [op] [b] [op] [c] ...
+function joinTokens(operator, tokenArrays) {
+  const result = [];
+  for (let i = 0; i < tokenArrays.length; i++) {
+    if (i > 0) result.push(operator);
+    result.push(...tokenArrays[i]);
+  }
+  return result;
+}
+
+// Resolves a single where-descriptor node (leaf, or {any:[...]}/{all:[...]} group)
+// into a token array. Groups are wrapped in {xpr:[...]} — CQN's parenthesization —
+// so precedence against sibling conditions at the enclosing level is preserved
+// (confirmed against cds.parse.expr's own output for parenthesized expressions).
+function toTokens(node) {
+  if (node.any) return [{ xpr: joinTokens('or', node.any.map(toTokens)) }];
+  if (node.all) return [{ xpr: joinTokens('and', node.all.map(toTokens)) }];
+  return buildLeafTokens(node);
+}
+
 /**
  * Build a CQN WHERE predicate array from descriptor conditions.
  * Supports association path refs ('assoc.COL') — CDS generates SQL JOINs for them.
- * Multiple conditions are AND-ed together.
+ * Supports OR/AND grouping via {any:[...]}/{all:[...]} nodes (can nest).
+ * Top-level conditions (and 'all' groups) are AND-ed together.
  *
  * Returns a flat CQN expression array compatible with SELECT.where([...]).
  */
 function buildWhereExpr(conditions) {
   if (!conditions?.length) return null;
-  const today = new Date();
+  const tokens = joinTokens('and', conditions.map(toTokens));
+  return tokens;
+}
 
-  const parts = conditions.map(({ col, op, val, valCol }) => {
-    const ref = colRef(col);
-    // valCol compares against another column instead of a literal (e.g. comparing
-    // collateral.VALUE against AMOUNT on the same query) — CDS resolves it as a
-    // normal path ref, generating a join the same way the main column would.
-    const rhs = valCol ? colRef(valCol) : { val };
-
-    switch (op) {
-      case 'within_days': {
-        const d0 = isoDate(today);
-        const d1 = isoDate(new Date(today.getTime() + Number(val) * 86400000));
-        return [ref, '>=', { val: d0 }, 'and', ref, '<=', { val: d1 }];
-      }
-      case 'days_ago': {
-        const d0 = isoDate(new Date(today.getTime() - Number(val) * 86400000));
-        const d1 = isoDate(today);
-        return [ref, '>=', { val: d0 }, 'and', ref, '<=', { val: d1 }];
-      }
-      case 'like':
-        // Genuinely case-insensitive — HANA's LIKE is case-sensitive by default,
-        // so wrap both sides in UPPER() rather than relying on collation settings.
-        return [{ func: 'upper', args: [ref] }, 'like', { val: `%${String(val).toUpperCase()}%` }];
-      default:
-        return [ref, op, rhs];
-    }
+// Recursively collects every 'col'/'valCol' path referenced anywhere in a where
+// tree, including inside nested any/all groups — used by the entity allowlist
+// check so a disallowed entity can't be reached by hiding its column inside a group.
+function collectWhereCols(conditions) {
+  return (conditions || []).flatMap(node => {
+    if (node.any) return collectWhereCols(node.any);
+    if (node.all) return collectWhereCols(node.all);
+    return node.valCol ? [node.col, node.valCol] : [node.col];
   });
-
-  if (parts.length === 1) return parts[0];
-
-  // Join individual predicates with 'and'
-  const result = [];
-  for (let i = 0; i < parts.length; i++) {
-    if (i > 0) result.push('and');
-    result.push(...parts[i]);
-  }
-  return result;
 }
 
 /**
@@ -143,7 +169,7 @@ async function executeDescriptor(descriptor, schema, callConfig = {}) {
   // which must independently pass the same allowlist check as the top-level entity.
   const allPaths = [
     ...(select || []),
-    ...(where || []).flatMap(w => w.valCol ? [w.col, w.valCol] : [w.col]),
+    ...collectWhereCols(where),
     ...(orderBy ? [orderBy] : []),
   ];
   const joinedEntities = collectJoinedEntities(allPaths, entityDef, schema);

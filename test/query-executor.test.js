@@ -104,6 +104,47 @@ test('like operator wraps both sides in UPPER() for case-insensitive matching', 
   }
 });
 
+test('any group produces an OR-ed, parenthesized (xpr) condition', async () => {
+  const capture = captureQuery();
+  try {
+    await executeDescriptor(
+      {
+        entity: 'Orders',
+        where: [
+          { any: [
+            { col: 'ID', op: '=', val: 'A' },
+            { col: 'ID', op: '=', val: 'B' },
+          ] },
+          { col: 'AMOUNT', op: '>', val: 10 },
+        ],
+      },
+      schema, {}
+    );
+    const where = capture.get().SELECT.where;
+    assert.ok(where[0].xpr, 'OR group must be wrapped in {xpr:[...]} for correct precedence');
+    assert.ok(where[0].xpr.includes('or'));
+    assert.equal(where[1], 'and');
+  } finally {
+    capture.restore();
+  }
+});
+
+test('any group referencing a blocked-via-allowlist joined entity is still caught', async () => {
+  await assert.rejects(
+    () => executeDescriptor(
+      {
+        entity: 'Orders',
+        where: [
+          { any: [{ col: 'customer.NAME', op: '=', val: 'X' }] },
+        ],
+      },
+      schema,
+      { allowedEntities: ['Orders'] } // Customers deliberately excluded
+    ),
+    /reached via association join/
+  );
+});
+
 test('row limit is capped by server maxRows', async () => {
   const capture = captureQuery();
   try {

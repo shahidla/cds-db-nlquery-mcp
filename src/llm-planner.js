@@ -39,6 +39,16 @@ JOINS — use association path expressions, no "join" field needed:
   - Multiple associations can be used in the same query (e.g. customer.BU_SORT1 and payments.DAYS_OVERDUE)
   - CDS generates optimised SQL JOINs from these paths — HANA handles multi-table joins at scale
 
+GROUPING (OR / nested AND-OR):
+  - Plain "where" array items are AND-ed together (unchanged).
+  - To express OR, wrap alternatives in {"any": [cond, cond, ...]}.
+  - To express an explicit AND group (e.g. inside an OR), use {"all": [...]}.
+  - Groups can nest. Example — "status Active or Pending, AND sector Mining":
+    "where": [
+      {"any": [{"col":"STATUS","op":"=","val":"A"}, {"col":"STATUS","op":"=","val":"P"}]},
+      {"col": "customer.sector", "op": "=", "val": "MINING"}
+    ]
+
 OPERATORS:
   "="  "!="  ">"  "<"  ">="  "<="  — standard comparison
   "like"        — case-insensitive string contains (wraps value in % automatically)
