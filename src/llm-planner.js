@@ -21,6 +21,7 @@ DESCRIPTOR FORMAT:
   "having":   [{ "fn": "...", "col": "...", "op": "...", "val": ... }] (optional),
   "search":   "free text term" (optional),
   "expand":   [{ "assoc": "...", "select": [...], "where": [...], "limit": N, "expand": [...] }] (optional),
+  "hierarchy": { "assoc": "...", "direction": "descendants"|"ancestors", "startWhere": [...], "maxDepth": N|null } (optional),
   "orderBy":  "COL or assocAlias.COL" or null,
   "orderDir": "ASC" | "DESC",
   "limit":    50
@@ -99,6 +100,20 @@ NESTED / DEEP READS (compositions, to-many):
     supported — use a separate query for the grandchild level instead.
   - "limit" inside an expand entry caps that nesting level's child rows per parent
     (independent of the top-level "limit").
+
+HIERARCHIES:
+  - Associations marked "self-referencing — hierarchy" in the schema represent a
+    parent/child tree (org charts, account trees, category trees, BOMs).
+  - For a FIXED number of hops ("show the parent's name"), use a normal path:
+    "select": ["parent.name"].
+  - For an UNBOUNDED traversal ("all descendants", "everything under X", "the full
+    ancestor chain"), use "hierarchy" instead of "select"-only/"where":
+    {"entity": "...", "hierarchy": {"assoc": "<self-ref alias>", "direction": "descendants"|"ancestors", "startWhere": [{"col":"...","op":"...","val":"..."}]}, "select": [...]}
+  - "startWhere" identifies the root row(s) to start from — plain columns only, no
+    association paths.
+  - Do NOT try to fake unbounded depth by chaining "parent.parent.parent...".
+  - "hierarchy" cannot be combined with where/aggregate/groupBy/having/search/expand/
+    orderBy — only "select" and "limit" apply alongside it.
 
 FREE-TEXT SEARCH:
   - An entity shown with a "searchable: COL1, COL2, ..." line declares which columns

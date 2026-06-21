@@ -310,6 +310,95 @@ function buildExpandCols(expandList, parentEntityDef, schema, allBlocked, maxExp
   });
 }
 
+// Executes a "hierarchy" descriptor — unbounded traversal of a self-referencing
+// association ("all descendants", "the full ancestor chain"), where a fixed-depth
+// "assocAlias.assocAlias.COL" path can't reach an arbitrary number of hops.
+//
+// Implementation note: the extension plan's reference design proposes a single
+// backend "WITH RECURSIVE" CTE (or HANA's HIERARCHY_DESCENDANTS/ANCESTORS table
+// functions) executed via raw SQL. That requires knowing each backend's physical
+// table-naming convention, which isn't reliably derivable from the CDS entity's
+// logical fqn, and couldn't be verified hands-on against a live HANA/SQLite driver
+// in this environment. Instead, this walks the tree level by level using the same
+// validated cds.ql SELECT/where machinery as the rest of this module (an extra
+// round trip per level, capped by maxHierarchyDepth) — slower than a single CTE on
+// a deep tree, but reuses already-correct entity/column resolution instead of
+// constructing raw SQL identifiers by hand.
+//
+// Algorithm: for a join { from, to } (column names on this same self-referencing
+// entity), the next level's rows are those whose <to> column matches the current
+// level's <from> column values — this holds for both directions, since it's just
+// the join's own already-resolved key pair (works for "children" to walk down via
+// from=ownKey/to=childFK, and for "parent" to walk up via from=ownFK/to=parentKey).
+async function executeHierarchy(hierarchy, entityDef, schema, select, allBlocked, effectiveLimit, serverCfg) {
+  const { assoc, direction, startWhere, maxDepth } = hierarchy;
+
+  if (direction !== 'descendants' && direction !== 'ancestors') {
+    throw new Error('"hierarchy.direction" must be "descendants" or "ancestors".');
+  }
+  const join = entityDef.joins?.[assoc];
+  if (!join) {
+    throw new Error(`Unknown association "${assoc}" for "hierarchy.assoc" — not found on "${entityDef.fqn}".`);
+  }
+  if (!join.recursive) {
+    throw new Error(`"${assoc}" is not a self-referencing association — "hierarchy" requires one (see the schema's "self-referencing — hierarchy" marker).`);
+  }
+  if (!startWhere?.length) {
+    throw new Error('"hierarchy.startWhere" must specify at least one condition to identify the root row(s).');
+  }
+  for (const col of collectWhereCols(startWhere)) {
+    if (col.includes('.')) {
+      throw new Error(`"hierarchy.startWhere" column "${col}" must be a plain column — paths are not supported here.`);
+    }
+  }
+
+  const effectiveSelect = (select?.length ? select : Object.keys(entityDef.columns))
+    .filter(c => !c.includes('.') && !allBlocked.has(c));
+  if (!effectiveSelect.length) {
+    throw new Error('"hierarchy" select columns must be plain columns of the entity (no association paths).');
+  }
+
+  // Track the join's own key columns across levels even if the caller didn't
+  // request them in "select" — needed to find the next level — then strip them
+  // back out of the rows actually returned.
+  const fetchCols = [...new Set([join.from, join.to, entityDef.key, ...effectiveSelect])];
+
+  const effectiveMaxDepth = Math.min(maxDepth ?? serverCfg.maxHierarchyDepth, serverCfg.maxHierarchyDepth);
+
+  const seen = new Set();      // node keys already collected — guards against cycles
+  const collected = [];
+  let currentWhere = buildWhereExpr(startWhere, entityDef, schema);
+  let depth = 0;
+
+  while (currentWhere && depth <= effectiveMaxDepth && collected.length < effectiveLimit) {
+    const q = SELECT.from(entityDef.fqn).columns(...fetchCols.map(colRef)).where(currentWhere)
+      .limit(effectiveLimit - collected.length + 1);
+    const levelRows = await cds.run(q);
+    if (!levelRows.length) break;
+
+    const newRows = levelRows.filter(row => {
+      const key = row[entityDef.key];
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+    if (!newRows.length) break;
+    collected.push(...newRows);
+
+    const nextIds = newRows.map(r => r[join.from]).filter(v => v != null);
+    if (!nextIds.length) break;
+
+    currentWhere = [{ ref: [join.to] }, 'in', { list: nextIds.map(v => ({ val: v })) }];
+    depth++;
+  }
+
+  return collected.slice(0, effectiveLimit).map(row => {
+    const out = {};
+    for (const c of effectiveSelect) out[c] = row[c];
+    return out;
+  });
+}
+
 /**
  * Execute a query descriptor against the CDS db layer.
  *
@@ -338,6 +427,12 @@ function buildExpandCols(expandList, parentEntityDef, schema, allBlocked, maxExp
  *               composition's rows instead of flattening them (one parent object with a
  *               nested array, via CAP's native expand). Can nest, but not two to-many
  *               levels deep (CQL limitation, validated up front).
+ *   hierarchy — { assoc, direction: 'descendants'|'ancestors', startWhere, maxDepth } —
+ *               unbounded traversal of a self-referencing association (org charts,
+ *               account trees, BOMs) starting from the row(s) matched by startWhere.
+ *               Mutually exclusive with where/aggregate/groupBy/having/search/expand/
+ *               orderBy — only "select" and "limit" apply alongside it. maxDepth is
+ *               capped server-side regardless of what's requested.
  *   orderBy   — column or 'assoc.COL'
  *   orderDir  — 'ASC' | 'DESC'
  *   limit     — rows requested (capped by server maxRows, enforced at SQL LIMIT)
@@ -358,6 +453,7 @@ async function executeDescriptor(descriptor, schema, callConfig = {}) {
     having,
     search,
     expand,
+    hierarchy,
     orderBy, orderDir,
     limit: rawLimit = 50,
     offset: rawOffset = 0,
@@ -384,6 +480,16 @@ async function executeDescriptor(descriptor, schema, callConfig = {}) {
   const entityDef = schema[entity];
   if (!entityDef) {
     throw new Error(`Unknown entity "${entity}". Known: ${Object.keys(schema).join(', ')}`);
+  }
+
+  if (hierarchy) {
+    if (where?.length || aggregate?.length || groupBy?.length || having?.length || search || expand?.length || orderBy) {
+      throw new Error('"hierarchy" cannot be combined with where, aggregate, groupBy, having, search, expand, or orderBy — only "select" and "limit".');
+    }
+    const callMax = callConfig.maxRows || Infinity;
+    const effectiveLimit = Math.min(rawLimit, serverCfg.maxRows, callMax);
+    const allBlocked = new Set([...serverCfg.blockedColumns, ...(callConfig.blockedColumns || [])]);
+    return executeHierarchy(hierarchy, entityDef, schema, select, allBlocked, effectiveLimit, serverCfg);
   }
 
   if (expand?.length) validateExpandNesting(expand, entityDef, schema, false);

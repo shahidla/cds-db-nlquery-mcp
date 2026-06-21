@@ -38,6 +38,14 @@ const schema = {
     columns: { ID: { type: 'String' }, NAME: { type: 'String' } },
     joins: {},
   },
+  Accounts: {
+    key: 'ID', fqn: 'app.Accounts',
+    columns: { ID: { type: 'String' }, NAME: { type: 'String' }, PARENT_ID: { type: 'String' } },
+    joins: {
+      parent:   { entity: 'Accounts', from: 'PARENT_ID', to: 'ID', type: 'INNER', toMany: false, recursive: true },
+      children: { entity: 'Accounts', from: 'ID', to: 'PARENT_ID', type: 'LEFT', toMany: true, recursive: true },
+    },
+  },
 };
 
 // Intercepts cds.run() so we can assert on the CQN query that would have been
@@ -50,6 +58,16 @@ function captureQuery() {
     get: () => captured,
     restore: () => { cds.run = original; },
   };
+}
+
+// Mocks cds.run to return one canned response per call, in order — used by the
+// "hierarchy" tests where each tree level issues its own SELECT.
+function mockRunSequence(responses) {
+  const original = cds.run;
+  let i = 0;
+  const calls = [];
+  cds.run = async q => { calls.push(q); return responses[i++] || []; };
+  return { calls, restore: () => { cds.run = original; } };
 }
 
 test('blocked columns are never sent to SQL, even with no explicit select', async () => {
@@ -582,5 +600,151 @@ test('viaFiltered is rejected in groupBy and orderBy', async () => {
       schema, {}
     ),
     /viaFiltered is not supported in "groupBy" or "orderBy"/
+  );
+});
+
+test('hierarchy: descendants walks the tree level by level until empty', async () => {
+  const mock = mockRunSequence([
+    [{ ID: 'A1', NAME: 'Region-North', PARENT_ID: null }],
+    [{ ID: 'A2', NAME: 'Sub1', PARENT_ID: 'A1' }, { ID: 'A3', NAME: 'Sub2', PARENT_ID: 'A1' }],
+    [],
+  ]);
+  try {
+    const rows = await executeDescriptor(
+      {
+        entity: 'Accounts',
+        hierarchy: { assoc: 'children', direction: 'descendants', startWhere: [{ col: 'NAME', op: '=', val: 'Region-North' }] },
+        select: ['ID', 'NAME'],
+      },
+      schema, {}
+    );
+    assert.deepEqual(rows, [
+      { ID: 'A1', NAME: 'Region-North' },
+      { ID: 'A2', NAME: 'Sub1' },
+      { ID: 'A3', NAME: 'Sub2' },
+    ]);
+    assert.equal(mock.calls.length, 3);
+  } finally {
+    mock.restore();
+  }
+});
+
+test('hierarchy: ancestors walks up via the "parent" alias', async () => {
+  const mock = mockRunSequence([
+    [{ ID: 'A3', NAME: 'Sub2', PARENT_ID: 'A1' }],
+    [{ ID: 'A1', NAME: 'Region-North', PARENT_ID: null }],
+  ]);
+  try {
+    const rows = await executeDescriptor(
+      {
+        entity: 'Accounts',
+        hierarchy: { assoc: 'parent', direction: 'ancestors', startWhere: [{ col: 'ID', op: '=', val: 'A3' }] },
+        select: ['ID', 'NAME'],
+      },
+      schema, {}
+    );
+    assert.deepEqual(rows, [
+      { ID: 'A3', NAME: 'Sub2' },
+      { ID: 'A1', NAME: 'Region-North' },
+    ]);
+  } finally {
+    mock.restore();
+  }
+});
+
+test('hierarchy: cycles are not collected twice', async () => {
+  const mock = mockRunSequence([
+    [{ ID: 'A1', NAME: 'Root', PARENT_ID: 'A2' }],
+    [{ ID: 'A2', NAME: 'Loop', PARENT_ID: 'A1' }],
+    [{ ID: 'A1', NAME: 'Root', PARENT_ID: 'A2' }], // would re-visit A1 — must be dropped
+  ]);
+  try {
+    const rows = await executeDescriptor(
+      {
+        entity: 'Accounts',
+        hierarchy: { assoc: 'children', direction: 'descendants', startWhere: [{ col: 'ID', op: '=', val: 'A1' }] },
+        select: ['ID'],
+      },
+      schema, {}
+    );
+    assert.deepEqual(rows.map(r => r.ID), ['A1', 'A2']);
+  } finally {
+    mock.restore();
+  }
+});
+
+test('hierarchy: maxDepth caps traversal regardless of remaining data', async () => {
+  const mock = mockRunSequence([
+    [{ ID: 'A1', NAME: 'L0', PARENT_ID: null }],
+    [{ ID: 'A2', NAME: 'L1', PARENT_ID: 'A1' }],
+    [{ ID: 'A3', NAME: 'L2', PARENT_ID: 'A2' }],
+  ]);
+  try {
+    const rows = await executeDescriptor(
+      {
+        entity: 'Accounts',
+        hierarchy: { assoc: 'children', direction: 'descendants', startWhere: [{ col: 'ID', op: '=', val: 'A1' }], maxDepth: 1 },
+        select: ['ID'],
+      },
+      schema, {}
+    );
+    assert.deepEqual(rows.map(r => r.ID), ['A1', 'A2']);
+    assert.equal(mock.calls.length, 2);
+  } finally {
+    mock.restore();
+  }
+});
+
+test('hierarchy: rejects a non-self-referencing association', async () => {
+  await assert.rejects(
+    () => executeDescriptor(
+      { entity: 'Orders', hierarchy: { assoc: 'customer', direction: 'descendants', startWhere: [{ col: 'ID', op: '=', val: 'X' }] } },
+      schema, {}
+    ),
+    /not a self-referencing association/
+  );
+});
+
+test('hierarchy: rejects an invalid direction', async () => {
+  await assert.rejects(
+    () => executeDescriptor(
+      { entity: 'Accounts', hierarchy: { assoc: 'children', direction: 'sideways', startWhere: [{ col: 'ID', op: '=', val: 'X' }] } },
+      schema, {}
+    ),
+    /"hierarchy.direction" must be/
+  );
+});
+
+test('hierarchy: rejects a missing startWhere', async () => {
+  await assert.rejects(
+    () => executeDescriptor(
+      { entity: 'Accounts', hierarchy: { assoc: 'children', direction: 'descendants' } },
+      schema, {}
+    ),
+    /startWhere.*must specify/
+  );
+});
+
+test('hierarchy: rejects an association-path column in startWhere', async () => {
+  await assert.rejects(
+    () => executeDescriptor(
+      { entity: 'Accounts', hierarchy: { assoc: 'children', direction: 'descendants', startWhere: [{ col: 'parent.NAME', op: '=', val: 'X' }] } },
+      schema, {}
+    ),
+    /must be a plain column/
+  );
+});
+
+test('hierarchy: rejects being combined with where/aggregate/expand/etc', async () => {
+  await assert.rejects(
+    () => executeDescriptor(
+      {
+        entity: 'Accounts',
+        hierarchy: { assoc: 'children', direction: 'descendants', startWhere: [{ col: 'ID', op: '=', val: 'X' }] },
+        where: [{ col: 'NAME', op: '=', val: 'Y' }],
+      },
+      schema, {}
+    ),
+    /cannot be combined with/
   );
 });

@@ -100,7 +100,14 @@ function buildSchema(cdsModel) {
         const joinType = col['@NLP.joinType'] || (toMany ? 'LEFT' : 'INNER');
         const alias    = col['@NLP.alias']    || colName;
 
-        joins[alias] = { entity: targetKey, from: keys.from, to: keys.to, type: joinType, toMany };
+        // A self-referencing association (target resolves back to this same entity)
+        // is the standard CDS pattern for a parent/child hierarchy (org charts, account
+        // trees, category trees, BOMs) — tag it so the LLM knows unbounded traversal
+        // ("all descendants", "the full ancestor chain") is possible via "hierarchy",
+        // not just a fixed-depth "assocAlias.assocAlias.COL" path.
+        const recursive = targetKey === keyFor(fqn);
+
+        joins[alias] = { entity: targetKey, from: keys.from, to: keys.to, type: joinType, toMany, recursive };
 
       } else if (col.type && col.virtual) {
         // Virtual elements are never persisted — populated by custom handler code at
@@ -258,7 +265,7 @@ function buildSchemaPrompt(schema) {
       })
       .join(', ');
     const joins = Object.entries(def.joins || {})
-      .map(([alias, j]) => `"${alias}"→${j.entity}(${j.from}=${j.to},${j.type}${j.toMany ? ',toMany' : ''})`)
+      .map(([alias, j]) => `"${alias}"→${j.entity}(${j.from}=${j.to},${j.type}${j.toMany ? ',toMany' : ''})${j.recursive ? '{self-referencing — hierarchy}' : ''}`)
       .join(', ');
     lines.push(`${name} [${def.label}]${def.description ? ` — ${def.description}` : ''}`);
     lines.push(`  columns: ${cols}`);

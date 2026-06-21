@@ -90,6 +90,62 @@ test('to-many compositions are flagged with toMany:true on the join', () => {
   assert.match(prompt, /"items"→Items\([^)]*,toMany\)/);
 });
 
+test('self-referencing associations are flagged recursive:true on the join', () => {
+  const csn = linkedModel({
+    'app.Accounts': {
+      kind: 'entity',
+      elements: {
+        ID:        { type: 'cds.String', key: true },
+        PARENT_ID: { type: 'cds.String' },
+        parent: {
+          type: 'cds.Association',
+          isAssociation: true,
+          target: 'app.Accounts',
+          cardinality: { max: 1 },
+          on: [{ ref: ['parent', 'ID'] }, '=', { ref: ['PARENT_ID'] }],
+        },
+        children: {
+          type: 'cds.Association',
+          isAssociation: true,
+          target: 'app.Accounts',
+          cardinality: { max: '*' },
+          on: [{ ref: ['children', 'PARENT_ID'] }, '=', { ref: ['ID'] }],
+        },
+      },
+    },
+  });
+  const schema = buildSchema(csn);
+  assert.equal(schema.Accounts.joins.parent.recursive, true);
+  assert.equal(schema.Accounts.joins.children.recursive, true);
+  const prompt = buildSchemaPrompt(schema);
+  assert.match(prompt, /"parent"→Accounts\([^)]*\)\{self-referencing — hierarchy\}/);
+});
+
+test('associations to a different entity are not flagged recursive', () => {
+  const csn = linkedModel({
+    'app.Orders': {
+      kind: 'entity',
+      elements: {
+        ID:       { type: 'cds.String', key: true },
+        CUSTOMER: { type: 'cds.String' },
+        customer: {
+          type: 'cds.Association',
+          isAssociation: true,
+          target: 'app.Customers',
+          cardinality: { max: 1 },
+          on: [{ ref: ['customer', 'ID'] }, '=', { ref: ['CUSTOMER'] }],
+        },
+      },
+    },
+    'app.Customers': {
+      kind: 'entity',
+      elements: { ID: { type: 'cds.String', key: true } },
+    },
+  });
+  const schema = buildSchema(csn);
+  assert.equal(schema.Orders.joins.customer.recursive, false);
+});
+
 test('native CDS enum is captured as value -> symbolic name', () => {
   const csn = linkedModel({
     'app.Loans': {
