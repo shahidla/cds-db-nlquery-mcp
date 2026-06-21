@@ -145,6 +145,72 @@ test('any group referencing a blocked-via-allowlist joined entity is still caugh
   );
 });
 
+test('aggregate produces a CQN function-call column with groupBy and having', async () => {
+  const capture = captureQuery();
+  try {
+    await executeDescriptor(
+      {
+        entity: 'Orders',
+        select: ['customer.NAME'],
+        aggregate: [{ fn: 'count', col: 'ID', as: 'order_count' }],
+        groupBy: ['customer.NAME'],
+        having: [{ fn: 'count', col: 'ID', op: '>', val: 5 }],
+      },
+      schema, {}
+    );
+    const sel = capture.get().SELECT;
+    const countCol = sel.columns.find(c => c.func === 'count');
+    assert.ok(countCol, 'aggregate column must be a {func,args} CQN node');
+    assert.equal(countCol.as, 'order_count');
+    assert.deepEqual(countCol.args, [{ ref: ['ID'] }]);
+    assert.ok(sel.groupBy.some(g => g.ref.join('.') === 'customer.NAME'));
+    assert.equal(sel.having[0].func, 'count');
+    assert.equal(sel.having[1], '>');
+    assert.equal(sel.having[2].val, 5);
+  } finally {
+    capture.restore();
+  }
+});
+
+test('aggregate with col "*" maps to count(1)', async () => {
+  const capture = captureQuery();
+  try {
+    await executeDescriptor(
+      { entity: 'Orders', aggregate: [{ fn: 'count', col: '*', as: 'total' }] },
+      schema, {}
+    );
+    const countCol = capture.get().SELECT.columns.find(c => c.func === 'count');
+    assert.deepEqual(countCol.args, [{ val: 1 }]);
+  } finally {
+    capture.restore();
+  }
+});
+
+test('aggregate referencing a column blocked via blockedColumns is stripped', async () => {
+  const capture = captureQuery();
+  try {
+    await executeDescriptor(
+      { entity: 'Orders', aggregate: [{ fn: 'sum', col: 'SECRET' }] },
+      schema, { blockedColumns: ['SECRET'] }
+    );
+    const cols = capture.get().SELECT.columns || [];
+    assert.equal(cols.length, 0, 'aggregate over a blocked column must not reach SQL');
+  } finally {
+    capture.restore();
+  }
+});
+
+test('aggregate referencing a joined entity is enforced by the allowlist', async () => {
+  await assert.rejects(
+    () => executeDescriptor(
+      { entity: 'Orders', aggregate: [{ fn: 'count', col: 'customer.ID' }] },
+      schema,
+      { allowedEntities: ['Orders'] } // Customers deliberately excluded
+    ),
+    /reached via association join/
+  );
+});
+
 test('row limit is capped by server maxRows', async () => {
   const capture = captureQuery();
   try {

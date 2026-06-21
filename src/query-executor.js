@@ -13,6 +13,16 @@ function colRef(colStr) {
   return { ref: colStr.split('.') };
 }
 
+// CQN function-call column, e.g. count(LOAN_ID) as loan_count — official CQN shape
+// per CAP's own reference: a function-call node is { func: String, args: expr[] }.
+function buildAggregateCol({ fn, col, as }) {
+  return {
+    func: fn,
+    args: col === '*' ? [{ val: 1 }] : [colRef(col)],
+    as:   as || `${fn}_${col === '*' ? 'all' : col.split('.').pop()}`,
+  };
+}
+
 function isoDate(d) { return d.toISOString().split('T')[0]; }
 
 // Walks every path string (e.g. 'customer.dti.DTI_RATIO') and resolves every
@@ -111,6 +121,15 @@ function collectWhereCols(conditions) {
   });
 }
 
+// Builds a flat CQN HAVING expression from descriptor having-conditions, AND-ed
+// together. Each leaf compares an aggregate function call to a literal, reusing
+// the same {func,args} shape as buildAggregateCol — e.g. count(LOAN_ID) > 5.
+function buildHavingExpr(conditions) {
+  if (!conditions?.length) return null;
+  const parts = conditions.map(({ fn, col, op, val }) => [buildAggregateCol({ fn, col }), op, { val }]);
+  return joinTokens('and', parts);
+}
+
 /**
  * Execute a query descriptor against the CDS db layer.
  *
@@ -123,6 +142,9 @@ function collectWhereCols(conditions) {
  *   entity    — entity short name (must be in schema)
  *   select    — columns, supports paths: ['PARTNER', 'customer.BU_SORT1', 'customer.dti.DTI_RATIO']
  *   where     — [{ col, op, val }]; col may be 'assoc.COL' for cross-entity conditions
+ *   aggregate — [{ fn: 'count'|'sum'|'avg'|'min'|'max', col: 'COLUMN or assocAlias.COLUMN or *', as }]
+ *   groupBy   — ['COLUMN or assocAlias.COLUMN', ...]
+ *   having    — [{ fn, col, op, val }] — filters on an aggregate value (e.g. count(LOAN_ID) > 5)
  *   orderBy   — column or 'assoc.COL'
  *   orderDir  — 'ASC' | 'DESC'
  *   limit     — rows requested (capped by server maxRows, enforced at SQL LIMIT)
@@ -137,6 +159,9 @@ async function executeDescriptor(descriptor, schema, callConfig = {}) {
     entity,
     select,
     where,
+    aggregate,
+    groupBy,
+    having,
     orderBy, orderDir,
     limit: rawLimit = 50,
   } = descriptor;
@@ -170,6 +195,9 @@ async function executeDescriptor(descriptor, schema, callConfig = {}) {
   const allPaths = [
     ...(select || []),
     ...collectWhereCols(where),
+    ...(aggregate || []).filter(a => a.col !== '*').map(a => a.col),
+    ...(groupBy || []),
+    ...(having || []).filter(h => h.col !== '*').map(h => h.col),
     ...(orderBy ? [orderBy] : []),
   ];
   const joinedEntities = collectJoinedEntities(allPaths, entityDef, schema);
@@ -202,8 +230,9 @@ async function executeDescriptor(descriptor, schema, callConfig = {}) {
   // Path refs like { ref: ['customer', 'BU_SORT1'] } → CDS generates a SQL JOIN
 
   let cols = null;
-  if (select?.length) {
-    const filtered = select.filter(c => !allBlocked.has(c.split('.').pop()));
+  if (select?.length || aggregate?.length) {
+    const filteredSelect = (select || []).filter(c => !allBlocked.has(c.split('.').pop()));
+    const filteredAggregate = (aggregate || []).filter(a => a.col === '*' || !allBlocked.has(a.col.split('.').pop()));
 
     // The LLM is told (rule 7) never to select the same leaf column name twice
     // (e.g. "CURRENCY" via the top-level entity AND via "loan.CURRENCY"), but a
@@ -212,11 +241,11 @@ async function executeDescriptor(descriptor, schema, callConfig = {}) {
     // joined-path column (length > 1) whose leaf name collides with another
     // selected column, so the query is always valid regardless of what the LLM did.
     const leafCounts = {};
-    for (const c of filtered) {
+    for (const c of filteredSelect) {
       const leaf = c.split('.').pop();
       leafCounts[leaf] = (leafCounts[leaf] || 0) + 1;
     }
-    cols = filtered.map(c => {
+    const selectCols = filteredSelect.map(c => {
       const parts = c.split('.');
       const leaf = parts[parts.length - 1];
       if (leafCounts[leaf] > 1 && parts.length > 1) {
@@ -224,6 +253,8 @@ async function executeDescriptor(descriptor, schema, callConfig = {}) {
       }
       return colRef(c);
     });
+    const aggregateCols = filteredAggregate.map(buildAggregateCol);
+    cols = [...selectCols, ...aggregateCols];
   } else if (allBlocked.size > 0) {
     // No explicit select ("all columns") but some columns are blocked. Without this,
     // the query would fall through to SELECT * — fetching blocked columns (e.g.
@@ -241,6 +272,11 @@ async function executeDescriptor(descriptor, schema, callConfig = {}) {
 
   const whereExpr = buildWhereExpr(where);
   if (whereExpr) q.where(whereExpr);
+
+  if (groupBy?.length) q.groupBy(...groupBy);
+
+  const havingExpr = buildHavingExpr(having);
+  if (havingExpr) q.having(havingExpr);
 
   if (orderBy) {
     q.orderBy([{ ...colRef(orderBy), sort: (orderDir || 'ASC').toLowerCase() }]);

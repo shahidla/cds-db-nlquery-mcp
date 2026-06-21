@@ -16,6 +16,9 @@ DESCRIPTOR FORMAT:
   "entity":   "<entity name from schema>",
   "select":   ["COL", "assocAlias.COL", "assocAlias1.assocAlias2.COL", ...] or null (all columns),
   "where":    [{ "col": "COL or assocAlias.COL", "op": "...", "val": ... }],
+  "aggregate": [{ "fn": "count"|"sum"|"avg"|"min"|"max", "col": "COL or assocAlias.COL or *", "as": "alias" }] (optional),
+  "groupBy":  ["COL or assocAlias.COL", ...] (optional),
+  "having":   [{ "fn": "...", "col": "...", "op": "...", "val": ... }] (optional),
   "orderBy":  "COL or assocAlias.COL" or null,
   "orderDir": "ASC" | "DESC",
   "limit":    50
@@ -38,6 +41,16 @@ JOINS — use association path expressions, no "join" field needed:
   - Available associations per entity are listed in the schema below under "assoc:"
   - Multiple associations can be used in the same query (e.g. customer.BU_SORT1 and payments.DAYS_OVERDUE)
   - CDS generates optimised SQL JOINs from these paths — HANA handles multi-table joins at scale
+
+AGGREGATION:
+  - Use "aggregate": [{ "fn": "count"|"sum"|"avg"|"min"|"max", "col": "COLUMN or assocAlias.COLUMN or *", "as": "alias" }]
+    when the question asks "how many", "total", "average", "highest", "lowest", or similar.
+  - Use "groupBy": ["COLUMN", ...] to group results — required whenever "select" or
+    "aggregate" mixes a non-aggregated column with an aggregate (same rule as SQL GROUP BY).
+  - Use "having" (same shape as "where" but referencing an aggregate via {"fn","col","op","val"})
+    to filter on the aggregated value itself, e.g. "customers with more than 5 loans".
+  - Do NOT use groupBy/aggregate for simple row-listing questions — only when the question
+    asks for a computed summary across multiple rows.
 
 GROUPING (OR / nested AND-OR):
   - Plain "where" array items are AND-ed together (unchanged).
