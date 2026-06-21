@@ -350,6 +350,23 @@ function buildSearchExpr(term, searchableColumns) {
   return [{ xpr: tokens }];
 }
 
+// Builds the closed-open-interval WHERE condition for a temporal entity:
+// from <= asOf AND to > asOf — same convention CDS's own temporal docs use.
+// Confirmed hands-on against a real cds.deploy()'d temporal entity (both the
+// `temporal` aspect and explicit @cds.valid.from/@cds.valid.to columns) that a
+// plain read with no filter returns EVERY time slice, not just the one valid "now"
+// — there is no implicit current-row filter at this query layer to rely on, so this
+// applies regardless of whether the descriptor specifies "asOf" (defaulting to the
+// current moment when it doesn't) rather than only when "asOf" is explicitly given.
+function buildTemporalWhereExpr(temporal, asOf) {
+  const asOfVal = asOf || new Date().toISOString();
+  return [
+    { ref: [temporal.from] }, '<=', { val: asOfVal },
+    'and',
+    { ref: [temporal.to] }, '>', { val: asOfVal },
+  ];
+}
+
 // Recursively collects every entity reached via an "expand" tree — used to extend
 // the entity allowlist check the same way collectJoinedEntities does for flat paths.
 function collectExpandEntities(expandList, parentEntityDef, schema) {
@@ -554,6 +571,14 @@ async function executeHierarchy(hierarchy, entityDef, schema, select, allBlocked
  *   caseWhen  — [{ as, when: [{ where, then }], else }] — a computed CASE WHEN column;
  *               "where" uses the same condition shape (incl. any/all/exists) as a normal
  *               "where" clause; branches are evaluated in order, first match wins.
+ *   asOf      — 'YYYY-MM-DD' (or full ISO timestamp) — time-travel read for a temporal
+ *               entity (one whose schema shows "[temporal: valid from X to Y]"): adds
+ *               an explicit "from <= asOf AND to > asOf" condition. Only valid on a
+ *               temporal entity. If omitted on a temporal entity, defaults to the
+ *               current moment — a plain read of a temporal entity with no filter at
+ *               all returns EVERY time slice, not just the current one (confirmed
+ *               against a real cds.deploy()'d temporal entity), so this default is
+ *               applied even when "asOf" isn't given.
  *   orderBy   — column or 'assoc.COL'
  *   orderDir  — 'ASC' | 'DESC'
  *   limit     — rows requested (capped by server maxRows, enforced at SQL LIMIT)
@@ -594,6 +619,7 @@ async function executeDescriptor(descriptor, schema, callConfig = {}) {
     window: windowList,
     windowFilter,
     caseWhen,
+    asOf,
     orderBy, orderDir,
     limit: rawLimit = 50,
     offset: rawOffset = 0,
@@ -779,6 +805,13 @@ async function executeDescriptor(descriptor, schema, callConfig = {}) {
     }
     const searchExpr = buildSearchExpr(search, entityDef.searchableColumns);
     whereExpr = whereExpr ? joinTokens('and', [whereExpr, searchExpr]) : searchExpr;
+  }
+
+  if (entityDef.temporal) {
+    const temporalExpr = buildTemporalWhereExpr(entityDef.temporal, asOf);
+    whereExpr = whereExpr ? joinTokens('and', [whereExpr, temporalExpr]) : temporalExpr;
+  } else if (asOf) {
+    throw new Error(`"asOf" was given but entity "${entity}" is not temporal (no @cds.valid.from/@cds.valid.to columns).`);
   }
 
   if (whereExpr) q.where(whereExpr);

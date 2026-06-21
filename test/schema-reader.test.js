@@ -500,3 +500,53 @@ test('@Common.ValueList is read correctly from the real compiler\'s flattened do
   const schema = buildSchema(csn);
   assert.equal(schema.Loans.columns.SECTOR.textVia, 'sector.DESCRIPTION');
 });
+
+// Confirmed against a real cds.load()/cds.linked() compile of an entity extending
+// the `temporal` aspect from @sap/cds/common: both the inherited validFrom/validTo
+// columns AND an entity using the explicit @cds.valid.from/@cds.valid.to annotations
+// compile to the same plain boolean annotation on the element — { '@cds.valid.from': true }.
+test('an entity with @cds.valid.from/@cds.valid.to columns is tagged temporal', () => {
+  const csn = linkedModel({
+    'app.WorkAssignments': {
+      kind: 'entity',
+      elements: {
+        ID:        { type: 'cds.String', key: true },
+        validFrom: { type: 'cds.Timestamp', '@cds.valid.from': true },
+        validTo:   { type: 'cds.Timestamp', '@cds.valid.to': true },
+        role:      { type: 'cds.String' },
+      },
+    },
+  });
+  const schema = buildSchema(csn);
+  assert.deepEqual(schema.WorkAssignments.temporal, { from: 'validFrom', to: 'validTo' });
+});
+
+test('an entity without both @cds.valid.from and @cds.valid.to is not tagged temporal', () => {
+  const csn = linkedModel({
+    'app.Orders': {
+      kind: 'entity',
+      elements: {
+        ID:         { type: 'cds.String', key: true },
+        ORDER_DATE: { type: 'cds.Date' },
+      },
+    },
+  });
+  const schema = buildSchema(csn);
+  assert.equal(schema.Orders.temporal, null);
+});
+
+test('buildSchemaPrompt renders a temporal entity\'s valid-from/valid-to columns', () => {
+  const csn = linkedModel({
+    'app.WorkAssignments': {
+      kind: 'entity',
+      elements: {
+        ID:        { type: 'cds.String', key: true },
+        validFrom: { type: 'cds.Timestamp', '@cds.valid.from': true },
+        validTo:   { type: 'cds.Timestamp', '@cds.valid.to': true },
+      },
+    },
+  });
+  const schema = buildSchema(csn);
+  const prompt = buildSchemaPrompt(schema);
+  assert.ok(prompt.includes('[temporal: valid from validFrom to validTo]'));
+});

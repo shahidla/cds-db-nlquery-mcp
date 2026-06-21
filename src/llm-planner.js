@@ -25,6 +25,7 @@ DESCRIPTOR FORMAT:
   "window":   [{ "fn": "...", "as": "alias", "col": "COL", "partitionBy": [...], "orderBy": [...] }] (optional),
   "windowFilter": [{ "col": "window alias", "op": "...", "val": ... }] (optional),
   "caseWhen": [{ "as": "alias", "when": [{ "where": [...], "then": "value" }], "else": "value" }] (optional),
+  "asOf":     "YYYY-MM-DD" (optional, temporal entities only — see TIME-TRAVEL QUERIES below),
   "orderBy":  "COL or assocAlias.COL" or null,
   "orderDir": "ASC" | "DESC",
   "limit":    50
@@ -168,6 +169,15 @@ COMBINING RESULTS FROM MULTIPLE ENTITIES (UNION / INTERSECT / EXCEPT):
   - Do NOT use this for joining related data from one entity to another via an association —
     that's a normal join path (unchanged), not a union. Union is for combining two
     conceptually separate result sets, not for relating rows to each other.
+
+TIME-TRAVEL QUERIES (temporal entities only):
+  - An entity shown as "[temporal: valid from X to Y]" tracks history — multiple time slices
+    per logical record. For "as of <date>" / "back in <year>" / "what was true on <date>"
+    questions, use "asOf": "YYYY-MM-DD" at the top level instead of trying to hand-write a
+    where condition on the validFrom/validTo columns yourself.
+  - Without "asOf", you get the current/latest slice — fine for "what is the current X"
+    questions on a temporal entity.
+  - "asOf" is only valid on a temporal entity — do not add it for any other entity.
 
 FREE-TEXT SEARCH:
   - An entity shown with a "searchable: COL1, COL2, ..." line declares which columns

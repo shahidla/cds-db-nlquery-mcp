@@ -105,6 +105,8 @@ function buildSchema(cdsModel) {
     const columns = {};
     const joins   = {};
     let   key     = null;
+    let   temporalFrom = null;
+    let   temporalTo   = null;
 
     for (const [colName, col] of Object.entries(def.elements || {})) {
       if (col.isAssociation || col.isComposition) {
@@ -204,6 +206,13 @@ function buildSchema(cdsModel) {
           meta._pendingValueList = valueList;
         }
 
+        // Temporal data (CAP's date-effective-record mechanism): a column tagged
+        // @cds.valid.from/@cds.valid.to, whether from explicit annotations or
+        // inherited from the `temporal` aspect (@sap/cds/common) — both compile to
+        // the same plain boolean annotation, confirmed against a real compile of each.
+        if (col['@cds.valid.from'] === true) temporalFrom = colName;
+        if (col['@cds.valid.to'] === true) temporalTo = colName;
+
         columns[colName] = meta;
         if (col.key) key = colName;
       }
@@ -249,6 +258,7 @@ function buildSchema(cdsModel) {
       columns,
       joins,
       searchableColumns,
+      temporal:    (temporalFrom && temporalTo) ? { from: temporalFrom, to: temporalTo } : null,
     };
   }
 
@@ -286,7 +296,8 @@ function buildSchemaPrompt(schema) {
     const joins = Object.entries(def.joins || {})
       .map(([alias, j]) => `"${alias}"→${j.entity}(${j.from}=${j.to},${j.type}${j.toMany ? ',toMany' : ''})${j.recursive ? '{self-referencing — hierarchy}' : ''}`)
       .join(', ');
-    lines.push(`${name} [${def.label}]${def.description ? ` — ${def.description}` : ''}`);
+    const temporalTag = def.temporal ? ` [temporal: valid from ${def.temporal.from} to ${def.temporal.to}]` : '';
+    lines.push(`${name} [${def.label}]${def.description ? ` — ${def.description}` : ''}${temporalTag}`);
     lines.push(`  columns: ${cols}`);
     if (joins) lines.push(`  joins:   ${joins}`);
     if (def.searchableColumns?.length) lines.push(`  searchable: ${def.searchableColumns.join(', ')}`);

@@ -46,6 +46,12 @@ const schema = {
       children: { entity: 'Accounts', from: 'ID', to: 'PARENT_ID', type: 'LEFT', toMany: true, recursive: true },
     },
   },
+  WorkAssignments: {
+    key: 'ID', fqn: 'app.WorkAssignments',
+    columns: { ID: { type: 'String' }, ROLE: { type: 'String' }, validFrom: { type: 'Timestamp' }, validTo: { type: 'Timestamp' } },
+    joins: {},
+    temporal: { from: 'validFrom', to: 'validTo' },
+  },
 };
 
 // Intercepts cds.run() so we can assert on the CQN query that would have been
@@ -1244,6 +1250,79 @@ test('union/intersect/except: respects per-call entity allowlist on each branch'
       ),
       /not in the per-call allowed_entities list/
     );
+  } finally {
+    capture.restore();
+  }
+});
+
+test('asOf: adds a closed-open temporal where condition on a temporal entity', async () => {
+  const capture = captureQuery();
+  try {
+    await executeDescriptor(
+      { entity: 'WorkAssignments', select: ['ID', 'ROLE'], asOf: '2017-01-01' },
+      schema, {}
+    );
+    assert.deepEqual(capture.get().SELECT.where, [
+      { ref: ['validFrom'] }, '<=', { val: '2017-01-01' },
+      'and',
+      { ref: ['validTo'] }, '>', { val: '2017-01-01' },
+    ]);
+  } finally {
+    capture.restore();
+  }
+});
+
+test('asOf: combines with an explicit "where" via AND', async () => {
+  const capture = captureQuery();
+  try {
+    await executeDescriptor(
+      {
+        entity: 'WorkAssignments',
+        select: ['ID'],
+        where: [{ col: 'ROLE', op: '=', val: 'Manager' }],
+        asOf: '2017-01-01',
+      },
+      schema, {}
+    );
+    assert.deepEqual(capture.get().SELECT.where, [
+      { ref: ['ROLE'] }, '=', { val: 'Manager' },
+      'and',
+      { ref: ['validFrom'] }, '<=', { val: '2017-01-01' }, 'and', { ref: ['validTo'] }, '>', { val: '2017-01-01' },
+    ]);
+  } finally {
+    capture.restore();
+  }
+});
+
+test('a temporal entity with no "asOf" still gets a current-moment temporal filter (a plain read otherwise returns every time slice)', async () => {
+  const capture = captureQuery();
+  try {
+    await executeDescriptor({ entity: 'WorkAssignments', select: ['ID'] }, schema, {});
+    const w = capture.get().SELECT.where;
+    assert.equal(w[0].ref[0], 'validFrom');
+    assert.equal(w[1], '<=');
+    assert.equal(w[3], 'and');
+    assert.equal(w[4].ref[0], 'validTo');
+    assert.equal(w[5], '>');
+    // The asOf value defaults to "now" — just assert it's a non-empty ISO-ish string, not a fixed date.
+    assert.ok(typeof w[2].val === 'string' && w[2].val.length > 0);
+  } finally {
+    capture.restore();
+  }
+});
+
+test('asOf is rejected on a non-temporal entity', async () => {
+  await assert.rejects(
+    () => executeDescriptor({ entity: 'Orders', select: ['ID'], asOf: '2017-01-01' }, schema, {}),
+    /"asOf" was given but entity "Orders" is not temporal/
+  );
+});
+
+test('a non-temporal entity is queried exactly as before — no temporal filter added', async () => {
+  const capture = captureQuery();
+  try {
+    await executeDescriptor({ entity: 'Orders', select: ['ID'] }, schema, {});
+    assert.equal(capture.get().SELECT.where, undefined);
   } finally {
     capture.restore();
   }
