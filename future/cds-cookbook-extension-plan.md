@@ -831,6 +831,213 @@ urgent.
 
 ---
 
+## 15. Window functions, ranking, and partitioning (RANK / ROW_NUMBER / NTILE / LAG / LEAD / running totals)
+
+### Why this section exists
+Someone who knows a schema and SQL well doesn't stop at `GROUP BY` — "top 3 loans per
+customer by amount," "rank customers by DTI within their sector," "running total of payments
+ordered by date," "this month vs. last month per account" are all completely ordinary
+business questions, and all of them are SQL **window functions**
+(`OVER (PARTITION BY ... ORDER BY ...)`), not plain aggregation. §1 (GROUP BY) *collapses*
+rows into one per group; window functions *keep every row* and attach a per-row, per-group
+computed value (a rank, a running sum, the previous row's value, etc.) — a fundamentally
+different and commonly-needed query shape that §1 cannot express.
+
+### CDS/CQL background
+Standard SQL window-function syntax:
+```sql
+SELECT LOAN_ID, customer_id, amount,
+       RANK() OVER (PARTITION BY customer_id ORDER BY amount DESC) AS amount_rank
+FROM Loans
+```
+Common functions: `ROW_NUMBER()`, `RANK()`, `DENSE_RANK()`, `NTILE(n)`, `LAG(col, offset)`,
+`LEAD(col, offset)`, and the same aggregates as §1 (`SUM`, `AVG`, `COUNT`, `MIN`, `MAX`) used
+*as window functions* (with `OVER (...)` instead of `GROUP BY`) for running totals / moving
+averages. SAP HANA supports the full standard set; SQLite has supported window functions
+since 3.25 (bundled with most current `@sap/cds` SQLite drivers).
+
+**Important constraint to design around:** CAP's `cds.ql` JS query builder, as of this
+package's current `@sap/cds` dependency, has **no first-class fluent API for window
+functions** (no `.over()`/`.partitionBy()` builder methods) — this needs to be re-verified
+against whatever `@sap/cds` version is installed when this is implemented, since CAP's query
+builder surface has grown over time, but treat "no native builder support" as the default
+assumption rather than discovering it the hard way mid-implementation.
+
+### Current state
+No support at all — not aggregation-adjacent, not partial, just absent. Today, "show the top
+3 highest loans for each customer" cannot be expressed by this package's descriptor in any
+form: a flat query with `orderBy`+`limit` only ranks/limits *globally*, not *within each
+group*, and §1's `groupBy`/`having` collapses rows so individual loan rows are gone by the
+time you could rank them.
+
+### Extension
+
+**1. Descriptor changes** — new optional `window` array (per-row computed columns) and an
+optional `windowFilter` (post-window filtering — see the SQL constraint explained below):
+```json
+{
+  "entity": "Loans",
+  "select": ["LOAN_ID", "customer.PARTNER", "AMOUNT"],
+  "window": [{
+    "fn": "rank",
+    "as": "amount_rank_in_customer",
+    "partitionBy": ["customer.PARTNER"],
+    "orderBy": [{ "col": "AMOUNT", "dir": "DESC" }]
+  }],
+  "windowFilter": [{ "col": "amount_rank_in_customer", "op": "<=", "val": 3 }],
+  "limit": 500
+}
+```
+- `fn` ∈ `row_number | rank | dense_rank | ntile | lag | lead | sum | avg | count | min | max`.
+- `ntile` requires `"buckets": n`. `lag`/`lead` require `"col"` (the value to pull) and
+  optional `"offset"` (default 1).
+- `partitionBy` is optional (omit for a window over the whole result set — e.g. a running
+  total of *all* payments ordered by date with no grouping).
+- `orderBy` here is the window's own ordering (distinct from the descriptor's top-level
+  `orderBy`, which still controls final row order).
+- `windowFilter` exists because of a real SQL rule, not an implementation choice: **a window
+  function's result alias cannot be referenced in a `WHERE` clause at the same query level**
+  (the standard mandates `WHERE` is evaluated before window functions are computed). "Top 3
+  per customer" therefore requires a derived-table wrap:
+  ```sql
+  SELECT * FROM ( SELECT ..., RANK() OVER (...) AS r FROM Loans ) WHERE r <= 3
+  ```
+
+**2. `src/query-executor.js` changes**
+- Build each `window` entry as a raw CQN expression column using CQN's `{ xpr: [...] }` token
+  array form (the same escape hatch CDS itself uses for expressions the fluent builder
+  doesn't model), e.g. tokens for
+  `RANK() OVER (PARTITION BY "PARTNER" ORDER BY "AMOUNT" DESC)`. **Every identifier inside
+  that token array must be resolved from the already-validated `schema`/`entityDef` object —
+  never interpolate the LLM's path strings directly** — reuse `colRef()`'s path-splitting and
+  the existing join-alias resolution so a `partitionBy`/`orderBy` column that's actually an
+  association path (`customer.PARTNER`) still goes through the same validated join-resolution
+  logic as a normal `select` column, not a separate ad-hoc path.
+- If `windowFilter` is present: build the *inner* query exactly as above (with the `window`
+  columns included), then wrap it — check whether the installed `cds.ql` supports
+  `SELECT.from(<a previously-built CQN SELECT>)` as a derived-table source; if it does, use
+  that and call `.where(...)` (reusing the existing `buildWhereExpr`/condition-group logic
+  from §2) on the outer wrapper. If the builder doesn't support subquery-in-FROM cleanly,
+  fall back to a single raw parameterized SQL string for this one specific shape (same
+  identifier-validation discipline as the hierarchy raw-SQL path in §4: resolve all
+  table/column names from `schema` before string-building, bind all filter values as
+  parameters, never concatenate user-influenced strings into the SQL text).
+- Extend the entity-allowlist `allPaths` walk (`query-executor.js:144-148`) to include columns
+  referenced inside `window.partitionBy`, `window.orderBy`, and `windowFilter` — same
+  closing-the-bypass rationale as every other section above.
+
+**3. `src/llm-planner.js` prompt changes**:
+```
+WINDOW FUNCTIONS (ranking, "top N per group", running totals — different from groupBy):
+  - Use "groupBy" + "aggregate" (§ above) when the question wants ONE summary row per group
+    ("total loans PER customer", "average DTI PER sector") — rows collapse.
+  - Use "window" instead when the question wants to KEEP every row but attach a per-row
+    rank/position/running value computed within a group, e.g. "top 3 loans per customer",
+    "rank customers by DTI within their sector", "running total of payments by date":
+    {"fn": "rank"|"row_number"|"dense_rank"|"ntile"|"lag"|"lead"|"sum"|"avg"|"count"|"min"|"max",
+     "as": "alias", "partitionBy": ["COL", ...] (optional), "orderBy": [{"col":"COL","dir":"ASC"|"DESC"}]}
+  - "Top N PER GROUP" questions need BOTH a "window" rank AND a "windowFilter" on that rank's
+    alias (e.g. {"col":"amount_rank_in_customer","op":"<=","val":3}) — a plain top-level
+    "where" cannot filter on a window-function result; you MUST use "windowFilter" for that.
+  - Do not use "window" for a simple "top N overall" question (no PARTITION BY implied) —
+    that's just "orderBy" + "limit", unchanged.
+```
+
+### Worked example
+*"Show the top 3 highest-amount loans for each customer."*
+```json
+{
+  "entity": "Loans",
+  "select": ["LOAN_ID", "customer.PARTNER", "AMOUNT"],
+  "window": [{ "fn": "rank", "as": "amount_rank_in_customer",
+               "partitionBy": ["customer.PARTNER"],
+               "orderBy": [{ "col": "AMOUNT", "dir": "DESC" }] }],
+  "windowFilter": [{ "col": "amount_rank_in_customer", "op": "<=", "val": 3 }],
+  "limit": 500
+}
+```
+*"Running total of payments per loan, ordered by payment date."*
+```json
+{
+  "entity": "Payments",
+  "select": ["LOAN_ID", "PAYMENT_DATE", "AMOUNT"],
+  "window": [{ "fn": "sum", "col": "AMOUNT", "as": "running_total",
+               "partitionBy": ["LOAN_ID"],
+               "orderBy": [{ "col": "PAYMENT_DATE", "dir": "ASC" }] }],
+  "orderBy": "PAYMENT_DATE",
+  "orderDir": "ASC",
+  "limit": 500
+}
+```
+
+---
+
+## Known limitations vs. full hand-written SQL — what stays out of scope, and why
+
+The question this section answers: *"If I gave this database to someone who knows SQL well,
+they could write any query they wanted — CTEs, window functions, subqueries, pivots, set
+operations, whatever the question needs. Can this package eventually do the same?"*
+
+**Short answer: mostly yes, for the question *shapes* that come up in practice — §1–§15 above
+cover aggregation, grouping, OR logic, existence checks, recursion, deep reads, and now
+ranking/partitioning/running totals, which together account for the large majority of
+real-world ad-hoc business questions. But this package is deliberately NOT, and should not
+become, a generic "let the LLM write and execute arbitrary SQL" engine.** The descriptor-JSON
+architecture is a constraint applied on purpose, not a temporary limitation waiting to be
+lifted. The list below is what remains genuinely out of scope even after implementing every
+extension in this document, and the architectural reason it's drawn there.
+
+| Capability | Status after §1–§15 | Why it's still out of scope |
+|---|---|---|
+| `WITH ... AS (...)` CTEs (general-purpose) | Not supported, except the one narrow raw-SQL CTE used internally for SQLite recursive hierarchy traversal (§4) | A general CTE feature means accepting arbitrary multi-step query structure from the LLM — at that point you're no longer validating a finite, known vocabulary, you're validating arbitrary SQL structure, which is a different and much harder security problem. |
+| `UNION` / `INTERSECT` / `EXCEPT` across entities or across two differently-shaped queries | Not supported | The descriptor is rooted at exactly one entity per call. Combining two different entities' result sets is a different mental model than "ask a question about your data" and most natural-language questions don't actually need it — they need a join (already supported) or two separate tool calls. |
+| Arbitrary correlated scalar subquery as a `SELECT` column (e.g. `(SELECT MAX(x) FROM y WHERE ...) AS col`) | Not supported as a generic feature | Only two specific, validated subquery *shapes* are supported: `exists`/`notExists` (§3) and the window-function derived-table wrap (§15). A generic "put any subquery anywhere" escape hatch reopens the same arbitrary-structure problem as CTEs. |
+| `CASE WHEN ... THEN ... ELSE ... END` computed expressions in `select` | Not covered by any section above — a genuine, not-yet-planned gap | Listed here deliberately so it isn't mistaken for "already handled." If needed, it should be added the same way every other section was: a `caseWhen` descriptor field, a CQN `{xpr:[...]}` builder with schema-validated identifiers only, and an explicit planner prompt rule — same pattern as §15, not a special exception. |
+| `FULL OUTER JOIN` | Not supported | CDS associations themselves only model `INNER`/`LEFT` cardinality-derived joins (`schema-reader.js:96-97`) — CAP's own modeling layer doesn't expose `FULL OUTER` as an association concept, so there's no schema-level hook to drive it from. Achievable only via raw SQL, which would need its own dedicated (and carefully scoped) extension. |
+| Stored procedure / user-defined function calls | Not supported, and not planned | Executing arbitrary procedures based on an LLM's interpretation of a question is a materially larger blast radius than read-only `SELECT`s — out of scope by design. |
+| Any write (`INSERT`/`UPDATE`/`DELETE`/DDL) | Not supported, and structurally cannot happen | The descriptor vocabulary has no field that means "write" — there's no parser path that could accidentally execute one. This is the one limitation that's a *feature*, not a gap: see the README's "Read-only" guarantee. |
+| `PIVOT` / `UNPIVOT`, dynamic column sets decided at query time | Not supported | Same arbitrary-structure problem as CTEs — the result *shape* of a pivot depends on data values, which conflicts with the "every column the LLM can touch is validated against the static schema up front" design. |
+| Truly unbounded result sets / unbounded recursion depth | Not supported, even where the underlying SQL feature exists (§4 hierarchies, §15 window functions over large partitions) | Every section above that introduces a new traversal or computation explicitly keeps the existing row caps (`MCP_MAX_ROWS`) and adds new caps where needed (`MCP_MAX_HIERARCHY_DEPTH`, `MCP_MAX_OFFSET`). This is intentional: an MCP tool answering chat questions has different cost/safety requirements than a BI analyst running a one-off query directly against the warehouse. |
+
+### The architectural reason, stated directly
+
+This package is not a text-to-SQL engine that hands an LLM's raw SQL string to the database.
+It is a small, fixed JSON descriptor vocabulary, compiled into CQN by trusted code, on
+purpose, because that's what makes the following three guarantees possible at all:
+
+1. **Every identifier is schema-validated before use.** Table and column names only ever
+   come from the `schema` object built from the real, loaded CDS model — never from an
+   LLM's free-form string substituted directly into a query. This is what prevents both SQL
+   injection through a crafted natural-language question and silent garbage queries against
+   columns that don't exist.
+2. **The existing security controls stay enforceable.** `MCP_ALLOWED_ENTITIES`,
+   `MCP_BLOCKED_COLUMNS`, and `MCP_MAX_ROWS` (`config.js`, enforced in
+   `query-executor.js:120-172`) only work because the descriptor's vocabulary is finite and
+   known in advance — every new feature in this document was explicitly threaded back through
+   that allowlist walk for exactly this reason. A generic SQL pass-through has no equivalent
+   choke point.
+3. **"Read-only" is structural, not a convention.** There is no code path anywhere in the
+   descriptor → CQN pipeline that can express a write or a DDL statement, because the
+   descriptor schema simply has no field that means that. A raw-SQL mode would have to
+   re-derive that guarantee by parsing and rejecting statement types at runtime — strictly
+   weaker than "the capability doesn't exist in the vocabulary at all."
+
+**If full arbitrary-SQL parity is genuinely required** — i.e., a use case that truly cannot
+be expressed by any combination of §1–§15 (CTEs, pivots, full outer joins, procedure calls) —
+that is a different and strictly higher-risk product, not an extension of this one. It should
+be a separate, explicitly opt-in mode: a distinct tool name (e.g. `raw_sql_query`, never the
+same tool as `natural_language_query`), gated behind its own config flag (e.g.
+`MCP_ENABLE_RAW_SQL=false` by default), with its own independent safeguards — a strict
+single-`SELECT`-statement validator that rejects multiple statements, DDL/DML keywords, and
+comment-hiding tricks; mandatory use of the restricted read-only `MCP_DB_USER` (never the
+app's default connection); and ideally execution inside an explicitly read-only transaction
+if the driver supports one. **Recommendation: implement §1–§15 first** — they cover the
+overwhelming majority of real question shapes, including ranking and partitioning — and only
+consider a raw-SQL mode if a specific, concrete question genuinely cannot be expressed any
+other way.
+
+---
+
 ## Suggested implementation order
 
 Ordered by (impact) ÷ (implementation risk), not strict dependency:
@@ -856,16 +1063,25 @@ Ordered by (impact) ÷ (implementation risk), not strict dependency:
     them together.
 12. **§4** Recursive hierarchies — most complex (potentially raw-SQL, DB-specific,
     security-sensitive), do last and with the most test coverage.
-13. **§14** Locale awareness — nice-to-have, no urgency.
+13. **§15** Window functions/ranking/partitioning — pair with §1 (shares the aggregate-fn
+    vocabulary and the same "verify cds.ql builder support, fall back to validated raw SQL"
+    risk profile as §4); do after §1–§4 are in and tested, since `windowFilter` reuses the
+    condition-group logic from §2.
+14. **§14** Locale awareness — nice-to-have, no urgency.
+
+See "Known limitations vs. full hand-written SQL" above for what's deliberately **not** on
+this list (CTEs, UNION/INTERSECT/EXCEPT, generic subqueries, CASE expressions, full outer
+joins, stored procedures, writes, pivot/unpivot) and why.
 
 ## Cross-cutting implementation notes for whoever picks this up
 
 - **Every new descriptor field must be threaded through the existing access-control checks**
   (`collectJoinedEntities` / the allowlist loop in `query-executor.js:141-160`). It is easy to
-  add a new way to reach a joined entity (via `exists`, `expand`, `viaFiltered`, `hierarchy`)
-  and forget to extend the allowlist walk — that would silently reopen the exact bypass the
-  existing code comment at `query-executor.js:19-22` was written to close. Treat this as a
-  required step for §1, §3, §4, §5, §12, not an optional follow-up.
+  add a new way to reach a joined entity (via `exists`, `expand`, `viaFiltered`, `hierarchy`,
+  `window.partitionBy`) and forget to extend the allowlist walk — that would silently reopen
+  the exact bypass the existing code comment at `query-executor.js:19-22` was written to
+  close. Treat this as a required step for §1, §3, §4, §5, §12, §15, not an optional
+  follow-up.
 - **Verify exact `cds.ql`/CQN builder syntax against the actual installed `@sap/cds` version**
   before writing executor code — several sections above flag "verify against installed
   version" because CAP's JS query builder API for aggregates/expand/exists has evolved across
