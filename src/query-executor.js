@@ -86,13 +86,63 @@ function joinTokens(operator, tokenArrays) {
   return result;
 }
 
-// Resolves a single where-descriptor node (leaf, or {any:[...]}/{all:[...]} group)
-// into a token array. Groups are wrapped in {xpr:[...]} — CQN's parenthesization —
-// so precedence against sibling conditions at the enclosing level is preserved
-// (confirmed against cds.parse.expr's own output for parenthesized expressions).
-function toTokens(node) {
-  if (node.any) return [{ xpr: joinTokens('or', node.any.map(toTokens)) }];
-  if (node.all) return [{ xpr: joinTokens('and', node.all.map(toTokens)) }];
+// Resolves an exists/notExists alias path (e.g. 'payments' or 'customer.payments')
+// hop by hop through the schema's join metadata, the same way collectJoinedEntities
+// does for ordinary path refs.
+function resolveAliasChain(aliasPath, startEntityDef, schema) {
+  const parts = aliasPath.split('.');
+  let currentDef = startEntityDef;
+  for (const part of parts) {
+    const join = currentDef?.joins?.[part];
+    if (!join) {
+      throw new Error(`Cannot resolve association path "${aliasPath}" for exists/notExists — unknown alias "${part}"`);
+    }
+    currentDef = schema[join.entity];
+  }
+  return parts;
+}
+
+// Builds the CQN token for an exists/notExists node, e.g.:
+//   { xpr: ['exists', { ref: ['payments', { id: 'STATUS'-filtered alias, where: [...] }] }] }
+// EXISTS over an association's infix filter is a native CQL/CQN construct — confirmed
+// against cds.parse.expr('exists payments[STATUS=\'OPEN\']'), which produces exactly
+// this { ref: [..., { id, where }] } shape; chained aliases (e.g. 'customer.payments')
+// resolve to extra leading ref segments the same way.
+function buildExistsTokens(node, startEntityDef, schema) {
+  const aliasPath = node.exists || node.notExists;
+  const aliasParts = resolveAliasChain(aliasPath, startEntityDef, schema);
+
+  const innerConditions = node.where || [];
+  // Known CQL limitation: paths inside an exists/notExists infix filter are not
+  // supported — the filter can only reference the target entity's own direct
+  // columns. Reject rather than silently sending an invalid query to the DB.
+  for (const col of collectWhereCols(innerConditions)) {
+    if (col.includes('.')) {
+      throw new Error(
+        `exists/notExists filter column "${col}" must be a plain column of "${aliasPath}" — ` +
+        `paths inside an exists/notExists filter are not supported by CQL.`
+      );
+    }
+  }
+  const innerWhere = buildWhereExpr(innerConditions);
+
+  const lastAlias = aliasParts[aliasParts.length - 1];
+  const refParts = [...aliasParts.slice(0, -1), innerWhere ? { id: lastAlias, where: innerWhere } : lastAlias];
+
+  return node.exists
+    ? [{ xpr: ['exists', { ref: refParts }] }]
+    : [{ xpr: ['not', 'exists', { ref: refParts }] }];
+}
+
+// Resolves a single where-descriptor node (leaf, {any:[...]}/{all:[...]} group, or
+// {exists:...}/{notExists:...}) into a token array. Groups are wrapped in {xpr:[...]}
+// — CQN's parenthesization — so precedence against sibling conditions at the
+// enclosing level is preserved (confirmed against cds.parse.expr's own output for
+// parenthesized expressions).
+function toTokens(node, startEntityDef, schema) {
+  if (node.any) return [{ xpr: joinTokens('or', node.any.map(n => toTokens(n, startEntityDef, schema))) }];
+  if (node.all) return [{ xpr: joinTokens('and', node.all.map(n => toTokens(n, startEntityDef, schema))) }];
+  if (node.exists || node.notExists) return buildExistsTokens(node, startEntityDef, schema);
   return buildLeafTokens(node);
 }
 
@@ -100,24 +150,42 @@ function toTokens(node) {
  * Build a CQN WHERE predicate array from descriptor conditions.
  * Supports association path refs ('assoc.COL') — CDS generates SQL JOINs for them.
  * Supports OR/AND grouping via {any:[...]}/{all:[...]} nodes (can nest).
+ * Supports {exists:alias,where:[...]} / {notExists:alias,where:[...]} for to-many
+ * association existence checks (startEntityDef/schema only needed for these).
  * Top-level conditions (and 'all' groups) are AND-ed together.
  *
  * Returns a flat CQN expression array compatible with SELECT.where([...]).
  */
-function buildWhereExpr(conditions) {
+function buildWhereExpr(conditions, startEntityDef, schema) {
   if (!conditions?.length) return null;
-  const tokens = joinTokens('and', conditions.map(toTokens));
+  const tokens = joinTokens('and', conditions.map(n => toTokens(n, startEntityDef, schema)));
   return tokens;
 }
 
 // Recursively collects every 'col'/'valCol' path referenced anywhere in a where
 // tree, including inside nested any/all groups — used by the entity allowlist
 // check so a disallowed entity can't be reached by hiding its column inside a group.
+// exists/notExists nodes are skipped here (their inner where is in a different
+// column scope, relative to the joined entity) — see collectExistsPaths instead.
 function collectWhereCols(conditions) {
   return (conditions || []).flatMap(node => {
     if (node.any) return collectWhereCols(node.any);
     if (node.all) return collectWhereCols(node.all);
+    if (node.exists || node.notExists) return [];
     return node.valCol ? [node.col, node.valCol] : [node.col];
+  });
+}
+
+// Recursively collects every exists/notExists association alias path referenced
+// anywhere in a where tree — used to extend the entity-allowlist check so a
+// disallowed entity can't be read indirectly via an exists filter.
+function collectExistsPaths(conditions) {
+  return (conditions || []).flatMap(node => {
+    if (node.any) return collectExistsPaths(node.any);
+    if (node.all) return collectExistsPaths(node.all);
+    if (node.exists) return [node.exists];
+    if (node.notExists) return [node.notExists];
+    return [];
   });
 }
 
@@ -195,6 +263,10 @@ async function executeDescriptor(descriptor, schema, callConfig = {}) {
   const allPaths = [
     ...(select || []),
     ...collectWhereCols(where),
+    // Append a dummy trailing segment so collectJoinedEntities (which treats the
+    // last path segment as the leaf column) resolves every alias hop, including
+    // the exists/notExists target itself, not just the hops before it.
+    ...collectExistsPaths(where).map(p => `${p}.__exists_target__`),
     ...(aggregate || []).filter(a => a.col !== '*').map(a => a.col),
     ...(groupBy || []),
     ...(having || []).filter(h => h.col !== '*').map(h => h.col),
@@ -270,7 +342,7 @@ async function executeDescriptor(descriptor, schema, callConfig = {}) {
   const q = SELECT.from(entityDef.fqn);
   if (cols?.length) q.columns(...cols);
 
-  const whereExpr = buildWhereExpr(where);
+  const whereExpr = buildWhereExpr(where, entityDef, schema);
   if (whereExpr) q.where(whereExpr);
 
   if (groupBy?.length) q.groupBy(...groupBy);

@@ -211,6 +211,57 @@ test('aggregate referencing a joined entity is enforced by the allowlist', async
   );
 });
 
+test('exists produces a native EXISTS infix-filter CQN node', async () => {
+  const capture = captureQuery();
+  try {
+    await executeDescriptor(
+      { entity: 'Orders', where: [{ exists: 'customer', where: [{ col: 'NAME', op: '=', val: 'Acme' }] }] },
+      schema, {}
+    );
+    const where = capture.get().SELECT.where;
+    assert.equal(where[0].xpr[0], 'exists');
+    assert.deepEqual(where[0].xpr[1].ref[0].id, 'customer');
+    assert.deepEqual(where[0].xpr[1].ref[0].where, [{ ref: ['NAME'] }, '=', { val: 'Acme' }]);
+  } finally {
+    capture.restore();
+  }
+});
+
+test('notExists produces a native NOT EXISTS infix-filter CQN node', async () => {
+  const capture = captureQuery();
+  try {
+    await executeDescriptor(
+      { entity: 'Orders', where: [{ notExists: 'customer', where: [{ col: 'NAME', op: '=', val: 'Acme' }] }] },
+      schema, {}
+    );
+    const where = capture.get().SELECT.where;
+    assert.deepEqual(where[0].xpr.slice(0, 2), ['not', 'exists']);
+  } finally {
+    capture.restore();
+  }
+});
+
+test('exists rejects a path-valued column inside the inner filter', async () => {
+  await assert.rejects(
+    () => executeDescriptor(
+      { entity: 'Orders', where: [{ exists: 'customer', where: [{ col: 'loan.STATUS', op: '=', val: 'A' }] }] },
+      schema, {}
+    ),
+    /paths inside an exists\/notExists filter are not supported/
+  );
+});
+
+test('exists target entity is enforced by the allowlist', async () => {
+  await assert.rejects(
+    () => executeDescriptor(
+      { entity: 'Orders', where: [{ exists: 'customer', where: [{ col: 'NAME', op: '=', val: 'Acme' }] }] },
+      schema,
+      { allowedEntities: ['Orders'] } // Customers deliberately excluded
+    ),
+    /reached via association join/
+  );
+});
+
 test('row limit is capped by server maxRows', async () => {
   const capture = captureQuery();
   try {

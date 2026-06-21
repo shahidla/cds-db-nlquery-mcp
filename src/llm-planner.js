@@ -52,6 +52,22 @@ AGGREGATION:
   - Do NOT use groupBy/aggregate for simple row-listing questions — only when the question
     asks for a computed summary across multiple rows.
 
+EXISTENCE FILTERS (to-many associations):
+  - To filter parent rows by "has at least one related row matching X", use:
+    {"exists": "assocAlias", "where": [{"col": "COL", "op": "...", "val": ...}]}
+    NOT a flat join — a flat join on a to-many association duplicates the parent row once
+    per matching child, which is wrong for "which customers have..." style questions.
+  - To filter for "has NO related row matching X" (e.g. "loans with no open payments"), use
+    "notExists" instead of "exists", same shape.
+  - The "where" inside an exists/notExists node is scoped to the TARGET entity of the
+    association — its "col" values are plain columns of that entity, never "assocAlias.COL"
+    and never a further association path (not supported inside this kind of filter).
+  - "exists"/"notExists" can chain associations as a dotted path, e.g. "customer.payments".
+  - Use a plain "assocAlias.COL" path in select/where only when you want to pull a SINGLE
+    related value alongside the parent row (to-one association, or to-many where row
+    duplication is acceptable/expected by the question, e.g. "list each payment with its
+    loan's amount").
+
 GROUPING (OR / nested AND-OR):
   - Plain "where" array items are AND-ed together (unchanged).
   - To express OR, wrap alternatives in {"any": [cond, cond, ...]}.
