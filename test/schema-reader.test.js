@@ -92,6 +92,56 @@ test('@Common.Text is captured as a textVia path hint', () => {
   assert.equal(schema.Loans.columns.STATUS.textVia, 'status.TEXT');
 });
 
+test('@description and @Core.Description are captured on columns and entities', () => {
+  const csn = linkedModel({
+    'app.Loans': {
+      kind: 'entity',
+      '@description': 'Loan accounts held by the bank',
+      elements: {
+        ID:  { type: 'cds.String', key: true },
+        DTI: { type: 'cds.Decimal', '@description': 'Debt-to-income ratio' },
+        LTV: { type: 'cds.Decimal', '@Core.Description': 'Loan-to-value ratio' },
+      },
+    },
+  });
+  const schema = buildSchema(csn);
+  assert.equal(schema.Loans.description, 'Loan accounts held by the bank');
+  assert.equal(schema.Loans.columns.DTI.description, 'Debt-to-income ratio');
+  assert.equal(schema.Loans.columns.LTV.description, 'Loan-to-value ratio');
+});
+
+test('@NLP.synonyms is captured as an array of alternate terms', () => {
+  const csn = linkedModel({
+    'app.Loans': {
+      kind: 'entity',
+      elements: {
+        ID:  { type: 'cds.String', key: true },
+        DTI: { type: 'cds.Decimal', '@NLP.synonyms': ['debt to income', 'debt-to-income ratio'] },
+      },
+    },
+  });
+  const schema = buildSchema(csn);
+  assert.deepEqual(schema.Loans.columns.DTI.synonyms, ['debt to income', 'debt-to-income ratio']);
+});
+
+test('buildSchemaPrompt renders description and synonyms as text', () => {
+  const csn = linkedModel({
+    'app.Loans': {
+      kind: 'entity',
+      '@description': 'Loan accounts',
+      elements: {
+        ID:  { type: 'cds.String', key: true },
+        DTI: { type: 'cds.Decimal', '@description': 'Debt-to-income ratio', '@NLP.synonyms': ['DTI ratio'] },
+      },
+    },
+  });
+  const schema = buildSchema(csn);
+  const prompt = buildSchemaPrompt(schema);
+  assert.match(prompt, /Loan accounts/);
+  assert.match(prompt, /Debt-to-income ratio/);
+  assert.match(prompt, /aka: DTI ratio/);
+});
+
 test('colliding short names fall back to fully-qualified keys', () => {
   const csn = linkedModel({
     'sales.Order':   { kind: 'entity', elements: { ID: { type: 'cds.String', key: true } } },

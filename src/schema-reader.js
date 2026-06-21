@@ -102,7 +102,20 @@ function buildSchema(cdsModel) {
       } else if (col.type && !col.virtual) {
         // @NLP.label takes precedence (room for disambiguation text), falls back to
         // the standard CDS @title annotation (e.g. already used for Fiori labels).
-        const meta = { type: mapType(col.type), label: col['@NLP.label'] || col['@title'] || null };
+        const meta = {
+          type:        mapType(col.type),
+          label:       col['@NLP.label'] || col['@title'] || null,
+          // @description/@Core.Description are standard CDS annotations meant for longer
+          // explanatory text (vs. @title's short label) — useful for disambiguating columns
+          // whose name/label alone don't convey business meaning to the LLM.
+          description: col['@description'] || col['@Core.Description'] || null,
+        };
+
+        // @NLP.synonyms has no standard CDS equivalent — alternate business terms the
+        // LLM should map onto this column (e.g. "DTI" -> "DEBT_TO_INCOME_RATIO").
+        if (col['@NLP.synonyms']?.length) {
+          meta.synonyms = col['@NLP.synonyms'];
+        }
 
         // Native CDS enum (e.g. `STATUS : String(1) enum { active = 'A'; closed = 'C'; }`)
         // — the same SAP-standard mechanism Fiori uses for value help / coded dropdowns.
@@ -134,8 +147,9 @@ function buildSchema(cdsModel) {
     const shortName  = fqn.split('.').pop();
     const entityKey  = keyFor(fqn);
     schema[entityKey] = {
-      label:   def['@NLP.label'] || def['@title'] || shortName,
-      key:     key || 'ID',
+      label:       def['@NLP.label'] || def['@title'] || shortName,
+      description: def['@description'] || def['@Core.Description'] || null,
+      key:         key || 'ID',
       fqn,
       columns,
       joins,
@@ -158,6 +172,8 @@ function buildSchemaPrompt(schema) {
       .map(([c, meta]) => {
         let s = `${c}:${meta.type}`;
         if (meta.label) s += `["${meta.label}"]`;
+        if (meta.description) s += ` — ${meta.description}`;
+        if (meta.synonyms) s += ` (aka: ${meta.synonyms.join(', ')})`;
         if (meta.enum) {
           const pairs = Object.entries(meta.enum).map(([val, name]) => `${name}="${val}"`).join(',');
           s += `{values: ${pairs} — use the raw value in filters}`;
@@ -171,7 +187,7 @@ function buildSchemaPrompt(schema) {
     const joins = Object.entries(def.joins || {})
       .map(([alias, j]) => `"${alias}"→${j.entity}(${j.from}=${j.to},${j.type})`)
       .join(', ');
-    lines.push(`${name} [${def.label}]`);
+    lines.push(`${name} [${def.label}]${def.description ? ` — ${def.description}` : ''}`);
     lines.push(`  columns: ${cols}`);
     if (joins) lines.push(`  joins:   ${joins}`);
   }

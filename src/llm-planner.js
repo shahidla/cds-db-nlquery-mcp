@@ -58,6 +58,7 @@ RULES:
 10. Words like "active", "closed", or "expired" usually describe a status value only. Do NOT infer overdue payments, arrears, missed instalments, dunning, or delinquency unless the question explicitly asks for them.
 11. If the question asks for "active loans with customer name and loan amount", that means filter loan status to active and select the customer name and loan amount. It does NOT imply any payment-status filter such as payments.DAYS_OVERDUE > 0.
 12. Before picking "entity", check that every column/path you plan to use in select/where/orderBy is actually reachable from it via that entity's own "assoc:" list (directly, or hop by hop). If a needed column lives on an entity that only has an association TO your candidate entity (not FROM it), start from that other entity instead — never invent an association alias that isn't listed, and never substitute an unrelated column when the right path doesn't exist on your first choice of entity.
+13. Entities/columns may show a short text after "—" (a description) and/or "(aka: ...)" (alternate business terms/synonyms). Use these to resolve ambiguous wording in the question to the correct column — e.g. if the question says "debt to income" and a column lists "(aka: debt to income, debt-to-income ratio)", that column is the match even though its name (e.g. "DTI") doesn't literally contain those words.
 
 SCHEMA:
 ${schemaText}`;
