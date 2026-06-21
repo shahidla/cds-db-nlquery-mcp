@@ -89,13 +89,16 @@ alias (default: `${fn}_${col}`).
 
 **2. `src/query-executor.js` changes**
 - Add a `buildAggregateCol({ fn, col, as })` helper producing a CQN function-call column:
-  `{ func: fn, args: col === '*' ? [{val: 1}] : [colRef(col)], as }`. (`cds.ql` supports
-  `{func:'count', args:[{val:1}]}` style nodes — verify against the installed `@sap/cds`
-  version's CQN function-call shape; fall back to raw CQL string via `cds.parse.cql` if the
-  programmatic builder rejects it.)
+  `{ func: fn, args: col === '*' ? [{val: 1}] : [colRef(col)], as }`. This is confirmed as the
+  official CQN shape for function calls (per CAP's own CQN reference — a function-call node is
+  literally `{func: String, args: expr[]}`), not a guess — no fallback to raw CQL string
+  parsing is needed for this part.
 - When `descriptor.aggregate` is present, append these to the `cols` array built at
   `query-executor.js:178-209` instead of (or alongside) plain columns.
 - When `descriptor.groupBy` is present, call `q.groupBy(...descriptor.groupBy.map(colRef))`.
+  `groupBy`/`having`/`distinct` are documented first-class `SELECT` clauses in both CQN and the
+  `cds.ql` fluent builder (`.groupBy(...)`, `.having(...)`), so this is a direct, sanctioned
+  builder call, not an undocumented corner.
 - When `descriptor.having` is present, build a CQN HAVING expression analogous to
   `buildWhereExpr` (reuse the same operator switch, just attach via `q.having(...)` instead
   of `q.where(...)`).
@@ -239,18 +242,29 @@ Nested `exists` (association chains) supported by allowing `exists` to itself be
 path: `"exists": "customer.payments"`.
 
 **2. `src/query-executor.js` changes**
-- Add a case in the (now-recursive, from §2) condition builder: when a node has `exists` or
-  `notExists`, resolve the association alias via `entityDef.joins[alias]` to get `{entity,
-  from, to}`, then build a CQN `exists`/`not exists` subquery:
+- `EXISTS` over an association's infix filter is a **native, first-class CQL/CQN construct** —
+  confirmed directly from CAP's own CQL reference: `WHERE EXISTS books[year = 2000]` is plain,
+  sanctioned CQL, and the compiler unfolds a path with several associations into nested
+  `EXISTS` predicates automatically. This is simpler than originally assumed — no hand-rolled
+  correlated subquery, no manual `$outer` reference is needed. Build it via the association's
+  infix-filter path directly:
   ```js
-  const sub = SELECT.from(joinedEntityDef.fqn).where(buildWhereForSub(node.where, joinedEntityDef))
-                .where({ ref: [to] }, '=', { ref: ['$outer', from] }); // correlate to outer row
-  return ['exists', sub]; // or ['not', 'exists', sub]
+  // CQN: { xpr: ['exists', { ref: [alias], where: [...] }] } — or, if the installed cds.ql
+  // exposes a fluent equivalent (e.g. `exists books.where(...)` / infix-filter path refs),
+  // prefer that over hand-built CQN. Resolve `alias` via entityDef.joins exactly as colRef()
+  // does for ordinary path refs, and build the inner `where` with the existing recursive
+  // condition builder from §2, scoped so its column names are NOT alias-prefixed (they're
+  // already relative to the joined entity, the way a real infix filter works).
   ```
-  Verify exact correlated-subquery CQN syntax against the installed `cds.ql` version — CAP's
-  `cds.ql` supports `CXN exists subquery` natively in newer versions
-  (`exists books.where(...)` style); prefer that builder API if available over hand-rolled
-  CQN, since it correctly handles correlation without manually referencing `$outer`.
+  For `notExists`, wrap the same construct with `not exists` instead of `exists`.
+- **Known CQL limitation to carry forward into this implementation**: "paths inside the
+  filter are not yet supported" — i.e. the infix filter inside `exists`/`notExists` can only
+  reference the *joined* entity's own direct columns, not a further association path off of
+  it (e.g. `exists payments[loan.STATUS='A']` is not valid CQL today). The descriptor's
+  `where` inside an `exists` node must therefore be restricted to plain columns of the
+  immediate target entity — reject (with a clear planner-facing error) any `col` inside an
+  `exists`/`notExists` node that itself contains a `.`, rather than silently sending an invalid
+  query to the DB.
 - Extend the entity-allowlist walk (`collectJoinedEntities`, `query-executor.js:23-37`) to
   also descend into `exists`/`notExists` association targets — otherwise a disallowed entity
   is readable indirectly via an `exists` filter even though it's blocked for direct/select use.
@@ -299,12 +313,22 @@ entity Accounts {
 ```
 Flat join path expressions (`parent.name`, `parent.parent.name`) only reach a **fixed,
 hard-coded number of hops** — fine for "show the parent" or "show the grandparent", but not
-for "show all descendants" or "show the full ancestor chain" at arbitrary depth. CAP added
-native hierarchy support for this (`@Hierarchy` annotations + `cds.hana.hierarchies`,
-surfaced to OData as `$apply=ancestors()/descendants()` and to plain CQL via
-`SELECT.from(Entity).hierarchy({...})`/`WITH HIERARCHY` on SAP HANA), which performs a
-recursive traversal in the database (SAP HANA `HIERARCHY_DESCENDANTS`/`HIERARCHY_ANCESTORS`
-table functions) rather than N chained joins.
+for "show all descendants" or "show the full ancestor chain" at arbitrary depth.
+
+**Confirmed native support exists** (this changes the recommended implementation path below).
+CAP has built-in **Recursive Hierarchies** support, declared on the entity (or via `annotate`)
+with the standard OData/Fiori `@Aggregation.RecursiveHierarchy` annotation:
+```cds
+annotate Accounts with @Aggregation.RecursiveHierarchy #AccountTree: {
+  NodeProperty:               ID,      // the node's own key
+  ParentNavigationProperty:   parent   // association pointing to the parent node
+};
+```
+CAP Node.js (consolidated with CAP Java's existing support) serves this for OData v4 — the
+Fiori Tree Table pattern — including sort/filter/search on hierarchical data, **on SAP HANA
+Cloud, SQLite, and PostgreSQL**. This is a materially stronger starting point than assuming
+"raw SQL on every backend": where the annotation is declared, the runtime already knows how to
+expand/collapse the tree without this package writing any traversal SQL itself.
 
 ### Current state
 `schema-reader.js:88-101` treats a self-referencing association exactly like any other
@@ -319,9 +343,18 @@ manually for a *fixed* depth, but:
 
 ### Extension
 
-**1. `schema-reader.js` changes** — detect self-referencing associations (where
-`col.target` resolves to the same entity as `def` itself, i.e. `targetKey === entityKey`) and
-tag them in the `joins` metadata:
+**1. `schema-reader.js` changes** — two independent signals, read both:
+- First, check for the entity-level `@Aggregation.RecursiveHierarchy` annotation (it may
+  appear directly on the entity or via a separate `annotate Entity with @Aggregation.
+  RecursiveHierarchy #Qualifier: {...}` elsewhere in the model — `cds.linked()` merges
+  `annotate` extensions onto the definition, so reading `def['@Aggregation.
+  RecursiveHierarchy']` off the linked entity should see it either way). If present, record
+  its `NodeProperty`/`ParentNavigationProperty` as `entityDef.nativeHierarchy = { nodeProp,
+  parentNav }` — this is the strong signal: the runtime has a declared, supported hierarchy.
+- Second, regardless of the annotation, detect self-referencing associations (where
+  `col.target` resolves to the same entity as `def` itself, i.e. `targetKey === entityKey`) and
+  tag them in the `joins` metadata — this is the weaker signal (a self-reference *could* be a
+  hierarchy even without the formal annotation):
 ```js
 joins[alias] = { entity: targetKey, from: keys.from, to: keys.to, type: joinType,
                  recursive: targetKey === entityKey };
@@ -343,12 +376,27 @@ join:
 `direction` ∈ `descendants | ancestors`. `startWhere` identifies the root row(s) to start
 from. `maxDepth: null` = unbounded (capped server-side, see below).
 
-**3. `src/query-executor.js` changes** — two implementation paths depending on backend:
-- **SAP HANA**: use HANA's native hierarchy support. CAP's `cds.ql` exposes this (check the
-  installed `@sap/cds` version's docs for the exact `.hierarchy(...)` / `$apply` builder; if
-  not available at the `cds.ql` level, fall back to raw SQL via `cds.run(cds.parse.cql(...))`
-  using HANA's `HIERARCHY_DESCENDANTS(SOURCE(...), START WHERE ...)` table function).
-- **SQLite (dev)**: SQLite supports `WITH RECURSIVE` CTEs. Since `cds.run()` doesn't expose
+**3. `src/query-executor.js` changes** — prefer the native path first, raw SQL only as fallback:
+- **Preferred path — native `@Aggregation.RecursiveHierarchy`**: if the target entity (or an
+  `annotate` extension of it, check both) carries this annotation, `schema-reader.js` should
+  surface it (see step 1 above) and the executor should drive CAP's own hierarchy query
+  support rather than hand-writing traversal SQL — verify the exact `cds.ql`/CQN surface for
+  this against the installed `@sap/cds` version (it is exposed via OData's
+  `$apply=ancestors()/descendants()` at the protocol layer; confirm what, if anything, is
+  exposed as a plain `cds.ql` builder call or CQN shape for direct `cds.run()` use without
+  going through an OData request — this is the one piece that still needs hands-on
+  verification against the installed version, since the annotation's existence is confirmed
+  but the exact non-OData JS entry point wasn't independently confirmed during this research
+  pass). This works uniformly across SAP HANA Cloud, SQLite, and PostgreSQL per the same
+  annotation — no backend-specific branching needed if this path is available.
+- **Fallback — no `@Aggregation.RecursiveHierarchy` annotation present on the entity**: the
+  consumer's schema doesn't declare the entity as a formal hierarchy, but the question still
+  implies unbounded traversal over a plain self-referencing association. Two backend-specific
+  raw-SQL paths, same as originally planned:
+  - **SAP HANA**: HANA's `HIERARCHY_DESCENDANTS(SOURCE(...), START WHERE ...)` /
+    `HIERARCHY_ANCESTORS(...)` table functions, via `cds.run(cds.parse.cql(...))` or a raw
+    parameterized SQL string if the CQL parser doesn't model table functions.
+  - **SQLite (dev)**: SQLite supports `WITH RECURSIVE` CTEs. Since `cds.run()` doesn't expose
   CTEs through the query builder, drop to a raw parameterized SQL string specifically for
   this code path, guarded behind a capability check (`cds.db.kind === 'sqlite'`), e.g.:
   ```sql
@@ -431,7 +479,14 @@ associations/compositions, that nests results instead of flattening them:
 }
 ```
 `expand` entries can themselves contain a nested `expand` (grandchildren), mirroring CAP's
-own nested-expand syntax.
+own nested-expand syntax — **with one confirmed limitation to carry into this implementation**:
+CAP's own CQL docs flag "nested expands following to-many associations" as currently
+unsupported. Concretely: `items { ID, parts { ID } }` where both `items` and `parts` are
+to-many is the unsupported shape; `items { ID, product { name } }` (to-many → to-one) is fine.
+The executor (and the planner prompt) must therefore reject/flatten a nested `expand` whose
+*parent* expand level is already a to-many association — validate this against
+`entityDef.joins[alias].type`/cardinality before building the query, and surface a clear
+planner-facing error rather than sending CAP a query it will reject at a less obvious point.
 
 **2. `src/query-executor.js` changes** — build the CQN using `cds.ql`'s native expand
 syntax rather than path-flattening:
@@ -533,10 +588,13 @@ is read-only anyway).
 `@Common.Text` (already supported by this package) is for simple 1:1 code→text lookups via
 an association. `@Common.ValueList` is the broader OData/Fiori "value help" annotation —
 points to a (possibly external, possibly parameterized) value-list entity, optionally with
-multiple display/filter columns and additional filter parameters (`CollectionPath`,
-`Parameters` with `In`/`Out` mappings). It's used for richer dropdown/search-help scenarios
-than a flat text lookup, e.g. a value list with both a code and a longer description plus a
-category filter.
+multiple display/filter columns and additional filter parameters. The `Parameters` array's
+entries use confirmed concrete `$Type` names — `ValueListParameterInOut` (the field maps both
+ways: it both filters the value-list lookup by the current row's value and writes the chosen
+value back) and `ValueListParameterDisplayOnly` (a value-list column shown for context but not
+mapped back to any field on the current entity, e.g. a longer description column). It's used
+for richer dropdown/search-help scenarios than a flat text lookup, e.g. a value list with both
+a code and a longer description plus a category filter.
 
 ### Current state
 `schema-reader.js:124-127` only reads `col['@Common.Text']`. `@Common.ValueList` is not read
@@ -547,17 +605,21 @@ semantically it's the same kind of problem this package already solves for `@Com
 ### Extension
 
 **1. `src/schema-reader.js` changes** — read `col['@Common.ValueList']`, specifically its
-`CollectionPath` (target entity) and the `Parameters` array's `In`/`Out`/`ValueListProperty`
-fields, and where a simple case can be detected (single `Out` parameter mapping a code field
-to a label field on the value-list entity, and that entity is reachable via an existing
-association), surface it the same way as `textVia`:
+`CollectionPath` (target entity) and the `Parameters` array's `ValueListProperty` fields, and
+where a simple case can be detected (a `ValueListParameterDisplayOnly` entry — a column shown
+for context but not round-tripped back to the current row — mapping to a label field on the
+value-list entity, and that entity is reachable via an existing association), surface it the
+same way as `textVia`:
 ```js
 const valueList = col['@Common.ValueList'];
 if (valueList?.CollectionPath && !meta.textVia) {
-  const labelParam = (valueList.Parameters || []).find(p => p.$Type?.includes('Out') && p.ValueListProperty !== col_pk_name);
+  const labelParam = (valueList.Parameters || [])
+    .find(p => p.$Type === 'Common.ValueListParameterDisplayOnly');
   if (labelParam) meta.valueListVia = `${assocAliasForCollectionPath}.${labelParam.ValueListProperty}`;
 }
 ```
+(A `ValueListParameterInOut` entry is the round-trip filter/key column, not a display label —
+don't use it as the text source.)
 This requires resolving `CollectionPath` (an entity FQN/name) back to an existing association
 alias on the current entity — if no direct association exists to that entity, this
 annotation can't be turned into a join path and should be skipped (log it, don't crash).
@@ -759,6 +821,20 @@ inline filter to the join's `on` condition (AND it into the existing `from=to` j
 for that alias) rather than as a top-level `WHERE`, using `cds.ql`'s infix-filter builder if
 available (`SELECT.from('Loans').columns(l => l.payments(p => p.where({STATUS:'OPEN'})).AMOUNT)`-style
 API — check the installed `@sap/cds` version's exact syntax) instead of hand-rolling CQN.
+**Confirmed CQL limitation that constrains this feature's scope**: "paths inside the filter
+are not yet supported" — i.e. `viaFiltered.where` conditions may only reference plain columns
+of the filtered association's *own* target entity, never a further association path off of
+it (`payments[loan.STATUS='A']` is invalid CQL). Validate this at planning time: reject any
+`viaFiltered.where[].col` that contains a `.`, with a clear error, rather than building an
+invalid query.
+**Complementary schema-level alternative worth documenting alongside this**: CDS supports
+declaring a fixed infix-filtered path directly in the model as an "association-like calculated
+element," e.g. `homeAddress = addresses[kind='home': 1];` — if the consumer's own schema
+already defines such a shortcut for a *commonly* filtered case, it shows up to this package as
+an ordinary association (no executor change needed at all) and is both simpler and safer than
+generating the filter dynamically per-query. Mention this in the README/docs as the
+recommended approach for filters the consumer knows will recur often; reserve the dynamic
+`viaFiltered` descriptor field for filters that vary per natural-language question.
 
 **3. `src/llm-planner.js` prompt changes** — relevant primarily once aggregation (§1) is
 also implemented, since infix filters mostly matter for "aggregate over a filtered subset of
@@ -809,10 +885,12 @@ isolated, safe to implement first as a quick win.
 
 ### CDS/CQL background
 `localized` on a string element (`localized DESCRIPTION : String`) tells CAP to maintain a
-shadow `_texts` table keyed by locale, and CAP's runtime **automatically** rewrites any read
-of that element into a join against the row matching the current request's locale (falling
-back to the default language). This already happens transparently at the `cds.run()` level —
-no special query syntax needed by the caller.
+shadow `.texts` companion entity (CAP's `TextsAspect`, keyed by the original entity's key plus
+`locale`) holding one row per translation, and CAP's runtime **automatically** rewrites any
+read of that element into a join against the row matching the current request's locale
+(falling back to the default language) — this is the concrete mechanism name to reference if
+this section is ever implemented (`<Entity>.texts`, generated by `TextsAspect`). This already
+happens transparently at the `cds.run()` level — no special query syntax needed by the caller.
 
 ### Current state
 Works "by accident" today — `localized` columns just look like normal `String` columns to
@@ -1070,30 +1148,237 @@ even outside of `union`.)
 
 ---
 
+## 17. `CASE WHEN` computed expressions
+
+### Why this section exists (and why it's no longer in the limitations list)
+An earlier pass of this document listed `CASE WHEN` as "a genuine, not-yet-planned gap" in the
+limitations table. Further research corrected that: CAP's own CQL reference confirms `CASE
+WHEN` with enum-symbol support is plain, sanctioned CQL —
+`case status when #open then 0 when #in_progress then 1 end as status_int` is a real, working
+example straight from the docs. There is nothing exotic or unsupported about it; it belongs
+here as a proper extension, on the same footing as §15 (window functions), not in the
+limitations table.
+
+### CDS/CQL background
+`CASE WHEN ... THEN ... [ELSE ...] END` works as a computed `SELECT` column exactly like
+standard SQL, with one CDS-specific convenience: `WHEN` branches can match against enum
+symbols (`#open`, `#in_progress`) instead of raw stored values, so the expression reads in
+terms of the model's own enum vocabulary rather than magic numbers/codes.
+
+### Current state
+Not supported. A question like *"label each loan's status as Healthy/Watch/Default based on
+DAYS_OVERDUE"* has no way to be expressed today — the LLM would have to either fabricate a
+column that doesn't exist, or fetch raw rows and ask the calling LLM client to do the
+classification client-side (workable, but pushes business logic into prose rather than the
+query).
+
+### Extension
+
+**1. Descriptor changes** — add an optional `caseWhen` array of computed columns, usable
+anywhere a normal column can appear in `select`:
+```json
+{
+  "entity": "Loans",
+  "select": ["LOAN_ID"],
+  "caseWhen": [{
+    "as": "risk_band",
+    "when": [
+      { "where": [{ "col": "DAYS_OVERDUE", "op": "<=", "val": 0 }], "then": "Healthy" },
+      { "where": [{ "col": "DAYS_OVERDUE", "op": "<=", "val": 30 }], "then": "Watch" }
+    ],
+    "else": "Default"
+  }],
+  "limit": 50
+}
+```
+Each `when` entry's `where` uses the same condition shape (including `any`/`all` groups from
+§2) as a normal `where` clause, scoped to the entity already in context (same column
+resolution as any other `select`/`where` reference — association paths allowed).
+
+**2. `src/query-executor.js` changes** — build via CQN's `{ xpr: [...] }` token-array escape
+hatch, the same sanctioned mechanism used for §15's window functions (CAP's own CQN reference
+describes `xpr` as deliberately "uninterpreted": keywords/operators are plain strings in a
+flat array, which is exactly what a `CASE WHEN` token sequence needs). Resolve every column
+reference inside each `when.where` through the existing recursive condition-building logic
+from §2 (`buildCondExpr`) so the same operator vocabulary and identifier validation apply —
+never assemble the `xpr` tokens from raw LLM strings. Extend the allowlist `allPaths` walk
+(`query-executor.js:144-148`) to include columns referenced inside `caseWhen[].when[].where`.
+
+**3. `src/llm-planner.js` prompt changes**:
+```
+COMPUTED LABELS (CASE WHEN):
+  - Use "caseWhen" to turn a numeric/coded column into a business-readable label inline,
+    e.g. classifying DAYS_OVERDUE into "Healthy"/"Watch"/"Default" bands:
+    {"as": "alias", "when": [{"where": [...], "then": "value"}, ...], "else": "value"}
+  - Branches are evaluated top to bottom; the first matching "where" wins (standard CASE WHEN
+    semantics) — order branches from most specific to least specific.
+  - Prefer an existing "_text" sibling (§ enum/Common.Text handling) over caseWhen whenever
+    the model already defines the human-readable mapping — caseWhen is for ad-hoc
+    classifications the question asks for that the schema doesn't already encode.
+```
+
+### Worked example
+*"Show each loan's ID and a risk band: Healthy if not overdue, Watch if 1-30 days overdue, Default otherwise."*
+```json
+{
+  "entity": "Loans",
+  "select": ["LOAN_ID"],
+  "caseWhen": [{
+    "as": "risk_band",
+    "when": [
+      { "where": [{ "col": "DAYS_OVERDUE", "op": "<=", "val": 0 }], "then": "Healthy" },
+      { "where": [{ "col": "DAYS_OVERDUE", "op": "<=", "val": 30 }], "then": "Watch" }
+    ],
+    "else": "Default"
+  }],
+  "limit": 200
+}
+```
+
+---
+
+## 18. Temporal data — `validFrom`/`validTo` time-sliced queries
+
+### CDS/CQL background
+CAP has a dedicated **temporal data** mechanism for date-effective records (price history,
+org-assignment history, anything where you need "what was true as of date X," not just
+"what's true now"). An entity becomes temporal either via explicit annotations:
+```cds
+entity WorkAssignments {
+  start : Date @cds.valid.from;
+  end   : Date @cds.valid.to;
+}
+```
+or, more commonly, via the predefined `temporal` aspect from `@sap/cds/common`:
+```cds
+using { temporal } from '@sap/cds/common';
+entity WorkAssignments : temporal { /* adds validFrom, validTo (Timestamp) automatically */ }
+```
+Time slices are uniquely identified by the conceptual key **plus** `validFrom` — the database
+primary key includes both, while the entity's exposed API still reads like a normal,
+timeless entity. Validity periods are expected to be **non-overlapping, closed-open
+intervals** (same convention as SQL:2011). Two query modes exist:
+- **As-of-now (default)**: a plain read returns only the row valid right now — no special
+  syntax required, CAP injects the date filter automatically based on the current moment.
+- **As-of-date / time-travel**: at the OData protocol layer this is the `sap-valid-at`
+  query parameter (e.g. `?sap-valid-at=date'2017-01-01'`); the underlying mechanism is a
+  session/request context variable (`valid-from`/`valid-to`) that the runtime uses to filter
+  temporal entities — confirmed to **not work on SQLite** today (session-context variables
+  aren't supported there), so this extension is HANA/Postgres-only in practice.
+
+### Current state
+Not read or handled specially anywhere. `schema-reader.js` treats `validFrom`/`validTo`
+columns like any other `Date`/`Timestamp` column — the LLM could, today, write a manual
+`where` on `validFrom <= X and validTo > X`, but it has no signal that an entity *is* temporal,
+so it has no reason to think to do that, and a plain "give me the loan as of last year" today
+silently returns whatever the *current* read returns (no error, just the wrong slice — a
+subtle correctness gap, not a hard failure).
+
+### Extension
+
+**1. `src/schema-reader.js` changes** — detect the `temporal` aspect/annotation pattern: an
+entity having both a column tagged `@cds.valid.from` and one tagged `@cds.valid.to` (whether
+via the explicit annotations or inherited from the `temporal` aspect — `cds.linked()` should
+expose the annotation regardless of which path the model used). Tag the entity:
+```js
+entityDef.temporal = { from: fromColName, to: toColName };
+```
+Render in the schema prompt: `WorkAssignments [temporal: valid from START to END]`.
+
+**2. Descriptor changes** — add an optional `asOf` field (a date string) at the top level of a
+descriptor targeting a temporal entity:
+```json
+{ "entity": "WorkAssignments", "select": [...], "asOf": "2017-01-01", "limit": 50 }
+```
+
+**3. `src/query-executor.js` changes** — when `descriptor.asOf` is present and
+`entityDef.temporal` exists, add an explicit `where` condition
+`from <= asOf AND to > asOf` (closed-open, matching the documented interval convention) rather
+than relying on session-context variables — this sidesteps the confirmed SQLite limitation
+entirely and works identically across HANA/SQLite/Postgres, at the cost of not using CAP's
+built-in protocol-level mechanism. If `asOf` is omitted, do nothing special — the entity reads
+exactly as it does today (as-of-now is already correct without intervention, since the
+underlying table only models point-in-time correctness via overlapping slices, not an
+implicit "current" filter this package would need to add itself — verify this assumption
+against the installed `@sap/cds` version's actual temporal-table DDL/view shape before
+shipping, since whether "as of now" needs an explicit filter or is handled entirely by a
+generated view depends on exactly how the consumer's project defines the temporal entity).
+
+**4. `src/llm-planner.js` prompt changes**:
+```
+TIME-TRAVEL QUERIES (temporal entities only):
+  - An entity shown as "[temporal: valid from X to Y]" tracks history — multiple time slices
+    per logical record. For "as of <date>" / "back in <year>" / "what was true on <date>"
+    questions, use "asOf": "YYYY-MM-DD" at the top level instead of trying to hand-write a
+    where condition on the validFrom/validTo columns yourself.
+  - Without "asOf", you get the current/latest slice — fine for "what is the current X"
+    questions on a temporal entity.
+```
+
+### Worked example
+*"What was the customer's work assignment on 2017-01-01?"*
+```json
+{ "entity": "WorkAssignments", "select": ["ID", "role"], "asOf": "2017-01-01", "limit": 50 }
+```
+
+---
+
+## 19. Native `excluding` clause — a documented alternative to `MCP_BLOCKED_COLUMNS` (not a recommended replacement)
+
+### CDS/CQL background
+CQL's `SELECT * excluding { col1, col2 }` removes named columns from an otherwise-implicit
+`*` projection, including inside nested expands/inlines. CAP's own docs frame its purpose as
+enabling "late materialization" — staying open to a source entity gaining new columns later
+without the view/query needing to be touched, since `excluding` only ever subtracts from
+whatever the source currently has.
+
+### Current state and why this package does NOT use this mechanism today
+`query-executor.js:201-209` implements column blocking the opposite way: when any columns are
+blocked, it builds an **explicit allow-list** of every column that isn't blocked
+(`Object.keys(entityDef.columns).filter(c => !allBlocked.has(c))`), rather than sending `*
+excluding {...}` to the database. This is a deliberate, security-relevant difference worth
+documenting explicitly so a future implementer doesn't "simplify" it away:
+
+| | `excluding` (CQL native) | This package's current approach |
+|---|---|---|
+| Behavior when schema gains a new column later | New column is **auto-included** in `*` (unless also added to the exclude list) | New column is **auto-excluded** until someone explicitly adds it to the allow-list build |
+| Failure mode if `MCP_BLOCKED_COLUMNS` is misconfigured/incomplete | A newly added sensitive column (e.g. a future `SSN` field) would be silently exposed | A newly added column is simply not selectable until the code/config catches up — safe by default |
+
+This is a "secure by default, fail closed" property worth keeping. **Do not replace the
+current allow-list construction with `excluding` for the blocklist feature** — the explicit
+allow-list is strictly safer for a security control whose entire job is "never expose column
+X," even if it requires a tiny bit more code than the native clause. `excluding` remains
+useful, if ever needed, for an unrelated purpose: letting the *LLM* deliberately omit specific
+columns from a result for readability (e.g. "show me everything except the internal notes
+field") — a UX nicety, not a security boundary, and should never be wired to the same code
+path as `MCP_BLOCKED_COLUMNS`/`allowedEntities` enforcement.
+
+---
+
 ## Known limitations vs. full hand-written SQL — what stays out of scope, and why
 
 The question this section answers: *"If I gave this database to someone who knows SQL well,
 they could write any query they wanted — CTEs, window functions, subqueries, pivots, set
 operations, whatever the question needs. Can this package eventually do the same?"*
 
-**Short answer: mostly yes, for the question *shapes* that come up in practice — §1–§16 above
+**Short answer: mostly yes, for the question *shapes* that come up in practice — §1–§19 above
 cover aggregation, grouping, OR logic, existence checks, recursion, deep reads,
-ranking/partitioning/running totals, and combining multiple entities' results, which together
-account for the large majority of real-world ad-hoc business questions. But this package is
-deliberately NOT, and should not become, a generic "let the LLM write and execute arbitrary
-SQL" engine.** The descriptor-JSON architecture is a constraint applied on purpose, not a
-temporary limitation waiting to be lifted. The list below is what remains genuinely out of
-scope even after implementing every extension in this document, and the architectural reason
-it's drawn there. (Note: an earlier draft of this table also listed `UNION`/`INTERSECT`/
-`EXCEPT` here — on review that was a mistake. Those are pure JS array operations on top of
-the *existing*, already-validated per-entity execution path, not a new SQL-structure risk —
-see §16 above, where they're now specified as a proper extension instead.)
+ranking/partitioning/running totals, combining multiple entities' results, computed CASE WHEN
+labels, and time-sliced/temporal queries, which together account for the large majority of
+real-world ad-hoc business questions. But this package is deliberately NOT, and should not
+become, a generic "let the LLM write and execute arbitrary SQL" engine.** The descriptor-JSON
+architecture is a constraint applied on purpose, not a temporary limitation waiting to be
+lifted. The list below is what remains genuinely out of scope even after implementing every
+extension in this document, and the architectural reason it's drawn there. (Two corrections
+from earlier drafts of this table, kept here for transparency: `UNION`/`INTERSECT`/`EXCEPT`
+were originally listed here as architecturally hard — wrong, see §16, they're pure JS array
+operations over the existing validated path. `CASE WHEN` was originally listed here as a vague
+"not yet planned gap" — also an underestimate; confirmed as plain native CQL, see §17.)
 
-| Capability | Status after §1–§16 | Why it's still out of scope |
+| Capability | Status after §1–§19 | Why it's still out of scope |
 |---|---|---|
-| `WITH ... AS (...)` CTEs (general-purpose) | Not supported, except the one narrow raw-SQL CTE used internally for SQLite recursive hierarchy traversal (§4) | A general CTE feature means accepting arbitrary multi-step query structure from the LLM — at that point you're no longer validating a finite, known vocabulary, you're validating arbitrary SQL structure, which is a different and much harder security problem. |
-| Arbitrary correlated scalar subquery as a `SELECT` column (e.g. `(SELECT MAX(x) FROM y WHERE ...) AS col`) | Not supported as a generic feature | Only two specific, validated subquery *shapes* are supported: `exists`/`notExists` (§3) and the window-function derived-table wrap (§15). A generic "put any subquery anywhere" escape hatch reopens the same arbitrary-structure problem as CTEs. |
-| `CASE WHEN ... THEN ... ELSE ... END` computed expressions in `select` | Not covered by any section above — a genuine, not-yet-planned gap | Listed here deliberately so it isn't mistaken for "already handled." If needed, it should be added the same way every other section was: a `caseWhen` descriptor field, a CQN `{xpr:[...]}` builder with schema-validated identifiers only, and an explicit planner prompt rule — same pattern as §15, not a special exception. |
+| `WITH ... AS (...)` CTEs (general-purpose) | Not supported, except the one narrow raw-SQL CTE used internally for SQLite recursive hierarchy traversal (§4, fallback path only) | A general CTE feature means accepting arbitrary multi-step query structure from the LLM — at that point you're no longer validating a finite, known vocabulary, you're validating arbitrary SQL structure, which is a different and much harder security problem. |
+| Arbitrary correlated scalar subquery as a `SELECT` column (e.g. `(SELECT MAX(x) FROM y WHERE ...) AS col`) | Not supported as a generic feature | Only specific, validated subquery *shapes* are supported: `exists`/`notExists` (§3), the window-function derived-table wrap (§15), and `caseWhen` (§17). A generic "put any subquery anywhere" escape hatch reopens the same arbitrary-structure problem as CTEs. |
 | `FULL OUTER JOIN` | Not supported | CDS associations themselves only model `INNER`/`LEFT` cardinality-derived joins (`schema-reader.js:96-97`) — CAP's own modeling layer doesn't expose `FULL OUTER` as an association concept, so there's no schema-level hook to drive it from. Achievable only via raw SQL, which would need its own dedicated (and carefully scoped) extension. |
 | Stored procedure / user-defined function calls | Not supported, and not planned | Executing arbitrary procedures based on an LLM's interpretation of a question is a materially larger blast radius than read-only `SELECT`s — out of scope by design. |
 | Any write (`INSERT`/`UPDATE`/`DELETE`/DDL) | Not supported, and structurally cannot happen | The descriptor vocabulary has no field that means "write" — there's no parser path that could accidentally execute one. This is the one limitation that's a *feature*, not a gap: see the README's "Read-only" guarantee. |
@@ -1124,18 +1409,18 @@ purpose, because that's what makes the following three guarantees possible at al
    weaker than "the capability doesn't exist in the vocabulary at all."
 
 **If full arbitrary-SQL parity is genuinely required** — i.e., a use case that truly cannot
-be expressed by any combination of §1–§16 (CTEs, pivots, full outer joins, procedure calls,
-arbitrary CASE expressions) — that is a different and strictly higher-risk product, not an
-extension of this one. It should be a separate, explicitly opt-in mode: a distinct tool name
-(e.g. `raw_sql_query`, never the same tool as `natural_language_query`), gated behind its own
-config flag (e.g. `MCP_ENABLE_RAW_SQL=false` by default), with its own independent
-safeguards — a strict single-`SELECT`-statement validator that rejects multiple statements,
-DDL/DML keywords, and comment-hiding tricks; mandatory use of the restricted read-only
-`MCP_DB_USER` (never the app's default connection); and ideally execution inside an
-explicitly read-only transaction if the driver supports one. **Recommendation: implement
-§1–§16 first** — they cover the overwhelming majority of real question shapes, including
-ranking, partitioning, and multi-entity combination — and only consider a raw-SQL mode if a
-specific, concrete question genuinely cannot be expressed any other way.
+be expressed by any combination of §1–§19 (CTEs, pivots, full outer joins, procedure calls) —
+that is a different and strictly higher-risk product, not an extension of this one. It should
+be a separate, explicitly opt-in mode: a distinct tool name (e.g. `raw_sql_query`, never the
+same tool as `natural_language_query`), gated behind its own config flag (e.g.
+`MCP_ENABLE_RAW_SQL=false` by default), with its own independent safeguards — a strict
+single-`SELECT`-statement validator that rejects multiple statements, DDL/DML keywords, and
+comment-hiding tricks; mandatory use of the restricted read-only `MCP_DB_USER` (never the
+app's default connection); and ideally execution inside an explicitly read-only transaction if
+the driver supports one. **Recommendation: implement §1–§19 first** — they cover the
+overwhelming majority of real question shapes, including ranking, partitioning, multi-entity
+combination, computed labels, and time-travel — and only consider a raw-SQL mode if a specific,
+concrete question genuinely cannot be expressed any other way.
 
 ---
 
@@ -1168,30 +1453,47 @@ Ordered by (impact) ÷ (implementation risk), not strict dependency:
     vocabulary and the same "verify cds.ql builder support, fall back to validated raw SQL"
     risk profile as §4); do after §1–§4 are in and tested, since `windowFilter` reuses the
     condition-group logic from §2.
-14. **§16** UNION/INTERSECT/EXCEPT — despite appearing last numerically, this is one of the
+14. **§16** UNION/INTERSECT/EXCEPT — despite appearing late numerically, this is one of the
     *lowest*-risk items on the whole list (pure JS array combination over the existing,
     already-validated single-entity execution path, no new SQL) — good candidate to pull
     forward and do early/cheaply alongside §2 if multi-entity questions come up often.
-15. **§14** Locale awareness — nice-to-have, no urgency.
+15. **§17** `CASE WHEN` — confirmed plain native CQL (no longer a vague gap); pair with §15
+    since both use the same `{xpr:[...]}` escape hatch and the same identifier-validation
+    discipline — implement together for shared review effort.
+16. **§18** Temporal data (`asOf`) — isolated, low risk (a single extra `where` condition,
+    purely additive), but only valuable if the consumer's schema actually has temporal
+    entities — do opportunistically, not on a fixed schedule.
+17. **§14** Locale awareness — nice-to-have, no urgency.
+18. **§19** Native `excluding` clause — not an implementation task at all, just a documented
+    decision to *not* adopt it for the security-relevant blocklist; read it once, then skip.
 
 See "Known limitations vs. full hand-written SQL" above for what's deliberately **not** on
-this list (CTEs, generic subqueries, CASE expressions, full outer joins, stored procedures,
-writes, pivot/unpivot) and why.
+this list (CTEs, generic subqueries, full outer joins, stored procedures, writes,
+pivot/unpivot) and why.
 
 ## Cross-cutting implementation notes for whoever picks this up
 
 - **Every new descriptor field must be threaded through the existing access-control checks**
   (`collectJoinedEntities` / the allowlist loop in `query-executor.js:141-160`). It is easy to
   add a new way to reach a joined entity (via `exists`, `expand`, `viaFiltered`, `hierarchy`,
-  `window.partitionBy`) and forget to extend the allowlist walk — that would silently reopen
-  the exact bypass the existing code comment at `query-executor.js:19-22` was written to
-  close. Treat this as a required step for §1, §3, §4, §5, §12, §15, not an optional
-  follow-up.
+  `window.partitionBy`, `caseWhen.when[].where`) and forget to extend the allowlist walk —
+  that would silently reopen the exact bypass the existing code comment at
+  `query-executor.js:19-22` was written to close. Treat this as a required step for §1, §3,
+  §4, §5, §12, §15, §17, not an optional follow-up.
 - **Verify exact `cds.ql`/CQN builder syntax against the actual installed `@sap/cds` version**
-  before writing executor code — several sections above flag "verify against installed
-  version" because CAP's JS query builder API for aggregates/expand/exists has evolved across
-  major versions. Write a tiny throwaway script (`node -e "..."` against a real CAP project)
-  to print the CQN AST for a hand-written `cds.ql` query before committing to a code shape.
+  before writing executor code. This research pass confirmed several pieces directly against
+  CAP's own docs/source — treat these as settled, not speculative: the `{func, args}`
+  function-call shape (§1), `groupBy`/`having`/`distinct` as documented `cds.ql` builder
+  methods (§1), `EXISTS`/infix-filter as native CQL with no hand-rolled subquery needed (§3),
+  the `{xpr:[...]}` uninterpreted-token escape hatch for window functions and `CASE WHEN`
+  (§15, §17), and the `@Aggregation.RecursiveHierarchy` annotation's existence and
+  cross-backend (HANA/SQLite/Postgres) support (§4). What's still genuinely unverified and
+  needs a hands-on check against the installed version before coding: the exact non-OData
+  `cds.ql`/CQN entry point for driving `@Aggregation.RecursiveHierarchy` directly via
+  `cds.run()` (§4), and whether the installed `cds.ql` supports a previously-built CQN
+  `SELECT` as a derived-table source for the `windowFilter` wrap (§15) — write a tiny
+  throwaway script (`node -e "..."` against a real CAP project) to print the CQN AST for a
+  hand-written `cds.ql` query before committing to either of those two specific code shapes.
 - **Every new feature needs a planner prompt section AND a schema-reader/executor change** —
   a feature that exists in the executor but isn't mentioned in `SYSTEM_PROMPT` will never be
   used by the LLM; a feature mentioned in the prompt but not implemented in the executor will
