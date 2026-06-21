@@ -156,6 +156,14 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
             maximum:     10000,
             description: 'Maximum rows to return for this call (cannot exceed server MCP_MAX_ROWS). Default: 50.',
           },
+          offset: {
+            type:        'integer',
+            minimum:     0,
+            description: [
+              'Rows to skip, for paging beyond the first page (e.g. "show me the next 50").',
+              'Capped by server MCP_MAX_OFFSET. Default: 0.',
+            ].join(' '),
+          },
         },
         required: ['question'],
       },
@@ -194,7 +202,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
   // ── natural_language_query ─────────────────────────────────────────────────
   if (name === 'natural_language_query') {
-    const { question, allowed_entities, blocked_columns, max_rows } = args;
+    const { question, allowed_entities, blocked_columns, max_rows, offset } = args;
 
     if (!question?.trim()) {
       return { content: [{ type: 'text', text: 'question is required' }], isError: true };
@@ -218,6 +226,11 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       };
     }
 
+    // "offset" is a pagination control supplied by the calling MCP client (e.g. a
+    // follow-up "show me the next 50"), not something the NL planner LLM infers from
+    // the question text — apply it directly to the planned descriptor.
+    if (offset != null) descriptor.offset = offset;
+
     process.stderr.write(`[cds-db-nlquery-mcp] ── Descriptor ──────────────────\n`);
     process.stderr.write(`  entity : ${descriptor.entity}\n`);
     if (descriptor.select) process.stderr.write(`  select : ${descriptor.select.join(', ')}\n`);
@@ -226,6 +239,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
     );
     if (descriptor.orderBy) process.stderr.write(`  order  : ${descriptor.orderBy} ${descriptor.orderDir || 'ASC'}\n`);
     process.stderr.write(`  limit  : ${descriptor.limit || 50}\n`);
+    if (descriptor.offset) process.stderr.write(`  offset : ${descriptor.offset}\n`);
     if (callConfig.allowedEntities.length) process.stderr.write(`  call-allowed : ${callConfig.allowedEntities.join(', ')}\n`);
     if (callConfig.blockedColumns.length)  process.stderr.write(`  call-blocked : ${callConfig.blockedColumns.join(', ')}\n`);
     process.stderr.write(`[cds-db-nlquery-mcp] ──────────────────────────────────\n`);

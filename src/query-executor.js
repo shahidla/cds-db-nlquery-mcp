@@ -216,6 +216,7 @@ function buildHavingExpr(conditions) {
  *   orderBy   — column or 'assoc.COL'
  *   orderDir  — 'ASC' | 'DESC'
  *   limit     — rows requested (capped by server maxRows, enforced at SQL LIMIT)
+ *   offset    — rows to skip for pagination (capped by server maxOffset, default 0)
  *
  * callConfig (per-call input param overrides — merged with server config):
  *   allowedEntities — restrict queryable entities for this call (intersects with server list)
@@ -232,6 +233,7 @@ async function executeDescriptor(descriptor, schema, callConfig = {}) {
     having,
     orderBy, orderDir,
     limit: rawLimit = 50,
+    offset: rawOffset = 0,
   } = descriptor;
 
   const serverCfg = require('./config');
@@ -289,6 +291,10 @@ async function executeDescriptor(descriptor, schema, callConfig = {}) {
 
   const callMax      = callConfig.maxRows || Infinity;
   const effectiveLimit = Math.min(rawLimit, serverCfg.maxRows, callMax);
+
+  // Clamp offset server-side too — an unbounded offset is an unintentional deep-
+  // pagination table-scan vector against the DB.
+  const effectiveOffset = Math.min(rawOffset, serverCfg.maxOffset);
 
   // ── Column blocklist — union of server + per-call ────────────────────────────
 
@@ -354,7 +360,7 @@ async function executeDescriptor(descriptor, schema, callConfig = {}) {
     q.orderBy([{ ...colRef(orderBy), sort: (orderDir || 'ASC').toLowerCase() }]);
   }
 
-  q.limit(effectiveLimit);   // single SQL LIMIT — HANA enforces it, not Node.js
+  q.limit(effectiveLimit, effectiveOffset);   // single SQL LIMIT/OFFSET — HANA enforces it, not Node.js
 
   let rows = await cds.run(q);
 

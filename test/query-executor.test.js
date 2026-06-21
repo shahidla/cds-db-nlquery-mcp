@@ -272,6 +272,30 @@ test('row limit is capped by server maxRows', async () => {
   }
 });
 
+test('offset is passed through to the SQL LIMIT/OFFSET clause', async () => {
+  const capture = captureQuery();
+  try {
+    await executeDescriptor({ entity: 'Orders', limit: 50, offset: 100 }, schema, {});
+    assert.equal(capture.get().SELECT.limit.offset.val, 100);
+  } finally {
+    capture.restore();
+  }
+});
+
+test('offset is capped by server maxOffset', async () => {
+  const capture = captureQuery();
+  const config = require('../src/config');
+  const original = config.maxOffset;
+  config.maxOffset = 1000;
+  try {
+    await executeDescriptor({ entity: 'Orders', offset: 999999 }, schema, {});
+    assert.equal(capture.get().SELECT.limit.offset.val, 1000);
+  } finally {
+    config.maxOffset = original;
+    capture.restore();
+  }
+});
+
 test('unknown entity throws a clear error', async () => {
   await assert.rejects(
     () => executeDescriptor({ entity: 'DoesNotExist' }, schema, {}),

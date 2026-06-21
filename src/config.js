@@ -17,6 +17,8 @@ function parseList(envVar) {
  *                          Recommended for production: set explicitly.
  * MCP_BLOCKED_COLUMNS   — comma-separated column names never returned (e.g. EMBEDDING,PASSWORD).
  * MCP_MAX_ROWS          — hard SQL LIMIT cap per query (default 500).
+ * MCP_MAX_OFFSET        — hard cap on pagination offset (default 100000), to bound
+ *                          deep-pagination table scans against the DB.
  * MCP_DB_USER/MCP_DB_PASSWORD — connect with a different (ideally restricted, read-only)
  *                          HANA user than the consumer app's own runtime user. Host/port/
  *                          schema are reused from the project's existing DB config —
@@ -39,6 +41,7 @@ module.exports = {
   allowedEntities: parseList(process.env.MCP_ALLOWED_ENTITIES),
   blockedColumns:  parseList(process.env.MCP_BLOCKED_COLUMNS),
   maxRows:         parseInt(process.env.MCP_MAX_ROWS || '500', 10),
+  maxOffset:       parseInt(process.env.MCP_MAX_OFFSET || '100000', 10),
   dbUser:          process.env.MCP_DB_USER || null,
   dbPassword:      process.env.MCP_DB_PASSWORD || null,
 
