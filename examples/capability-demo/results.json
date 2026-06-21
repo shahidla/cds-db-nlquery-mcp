@@ -1,0 +1,2503 @@
+[
+  {
+    "id": "old-01-plain-where",
+    "nl": "Show open orders for customer C1",
+    "descriptor": {
+      "entity": "Orders",
+      "select": [
+        "ID",
+        "CUSTOMER_ID",
+        "AMOUNT",
+        "CURRENCY",
+        "STATUS"
+      ],
+      "where": [
+        {
+          "col": "CUSTOMER_ID",
+          "op": "=",
+          "val": "C1"
+        },
+        {
+          "col": "STATUS",
+          "op": "=",
+          "val": "O"
+        }
+      ]
+    },
+    "cqn": [
+      {
+        "SELECT": {
+          "from": {
+            "ref": [
+              "capdemo.Orders"
+            ]
+          },
+          "columns": [
+            {
+              "ref": [
+                "ID"
+              ]
+            },
+            {
+              "ref": [
+                "CUSTOMER_ID"
+              ]
+            },
+            {
+              "ref": [
+                "AMOUNT"
+              ]
+            },
+            {
+              "ref": [
+                "CURRENCY"
+              ]
+            },
+            {
+              "ref": [
+                "STATUS"
+              ]
+            }
+          ],
+          "where": [
+            {
+              "ref": [
+                "CUSTOMER_ID"
+              ]
+            },
+            "=",
+            {
+              "val": "C1"
+            },
+            "and",
+            {
+              "ref": [
+                "STATUS"
+              ]
+            },
+            "=",
+            {
+              "val": "O"
+            }
+          ],
+          "limit": {
+            "rows": {
+              "val": 50
+            },
+            "offset": {
+              "val": 0
+            }
+          }
+        }
+      }
+    ],
+    "sql": [
+      "SELECT \"$O\".ID,\"$O\".CUSTOMER_ID,\"$O\".AMOUNT,\"$O\".CURRENCY,\"$O\".STATUS FROM capdemo_Orders as \"$O\" WHERE \"$O\".CUSTOMER_ID = ? and \"$O\".STATUS = ? LIMIT ? OFFSET ?"
+    ],
+    "rows": [
+      {
+        "ID": "O1",
+        "CUSTOMER_ID": "C1",
+        "AMOUNT": 1500,
+        "CURRENCY": "USD",
+        "STATUS": "O",
+        "STATUS_text": "open"
+      },
+      {
+        "ID": "O6",
+        "CUSTOMER_ID": "C1",
+        "AMOUNT": 99.99,
+        "CURRENCY": "USD",
+        "STATUS": "O",
+        "STATUS_text": "open"
+      }
+    ],
+    "error": null
+  },
+  {
+    "id": "old-02-aggregation-groupby",
+    "nl": "Total order amount per customer",
+    "descriptor": {
+      "entity": "Orders",
+      "select": [
+        "CUSTOMER_ID"
+      ],
+      "aggregate": [
+        {
+          "fn": "sum",
+          "col": "AMOUNT",
+          "as": "TOTAL_AMOUNT"
+        }
+      ],
+      "groupBy": [
+        "CUSTOMER_ID"
+      ]
+    },
+    "cqn": [
+      {
+        "SELECT": {
+          "from": {
+            "ref": [
+              "capdemo.Orders"
+            ]
+          },
+          "columns": [
+            {
+              "ref": [
+                "CUSTOMER_ID"
+              ]
+            },
+            {
+              "func": "sum",
+              "args": [
+                {
+                  "ref": [
+                    "AMOUNT"
+                  ]
+                }
+              ],
+              "as": "TOTAL_AMOUNT"
+            }
+          ],
+          "groupBy": [
+            {
+              "ref": [
+                "CUSTOMER_ID"
+              ]
+            }
+          ],
+          "limit": {
+            "rows": {
+              "val": 50
+            },
+            "offset": {
+              "val": 0
+            }
+          }
+        }
+      }
+    ],
+    "sql": [
+      "SELECT \"$O\".CUSTOMER_ID,sum(\"$O\".AMOUNT) as TOTAL_AMOUNT FROM capdemo_Orders as \"$O\" GROUP BY \"$O\".CUSTOMER_ID LIMIT ? OFFSET ?"
+    ],
+    "rows": [
+      {
+        "CUSTOMER_ID": "C1",
+        "TOTAL_AMOUNT": 3900.49
+      },
+      {
+        "CUSTOMER_ID": "C2",
+        "TOTAL_AMOUNT": 5000
+      },
+      {
+        "CUSTOMER_ID": "C3",
+        "TOTAL_AMOUNT": 150
+      }
+    ],
+    "error": null
+  },
+  {
+    "id": "old-03-boolean-or-grouping",
+    "nl": "Orders that are open or over 2000",
+    "descriptor": {
+      "entity": "Orders",
+      "select": [
+        "ID",
+        "STATUS",
+        "AMOUNT"
+      ],
+      "where": [
+        {
+          "any": [
+            {
+              "col": "STATUS",
+              "op": "=",
+              "val": "O"
+            },
+            {
+              "col": "AMOUNT",
+              "op": ">",
+              "val": 2000
+            }
+          ]
+        }
+      ]
+    },
+    "cqn": [
+      {
+        "SELECT": {
+          "from": {
+            "ref": [
+              "capdemo.Orders"
+            ]
+          },
+          "columns": [
+            {
+              "ref": [
+                "ID"
+              ]
+            },
+            {
+              "ref": [
+                "STATUS"
+              ]
+            },
+            {
+              "ref": [
+                "AMOUNT"
+              ]
+            }
+          ],
+          "where": [
+            {
+              "xpr": [
+                {
+                  "ref": [
+                    "STATUS"
+                  ]
+                },
+                "=",
+                {
+                  "val": "O"
+                },
+                "or",
+                {
+                  "ref": [
+                    "AMOUNT"
+                  ]
+                },
+                ">",
+                {
+                  "val": 2000
+                }
+              ]
+            }
+          ],
+          "limit": {
+            "rows": {
+              "val": 50
+            },
+            "offset": {
+              "val": 0
+            }
+          }
+        }
+      }
+    ],
+    "sql": [
+      "SELECT \"$O\".ID,\"$O\".STATUS,\"$O\".AMOUNT FROM capdemo_Orders as \"$O\" WHERE (\"$O\".STATUS = ? or \"$O\".AMOUNT > ?) LIMIT ? OFFSET ?"
+    ],
+    "rows": [
+      {
+        "ID": "O1",
+        "STATUS": "O",
+        "AMOUNT": 1500,
+        "STATUS_text": "open"
+      },
+      {
+        "ID": "O2",
+        "STATUS": "C",
+        "AMOUNT": 2300.5,
+        "STATUS_text": "closed"
+      },
+      {
+        "ID": "O3",
+        "STATUS": "O",
+        "AMOUNT": 800,
+        "STATUS_text": "open"
+      },
+      {
+        "ID": "O4",
+        "STATUS": "C",
+        "AMOUNT": 4200,
+        "STATUS_text": "closed"
+      },
+      {
+        "ID": "O5",
+        "STATUS": "O",
+        "AMOUNT": 150,
+        "STATUS_text": "open"
+      },
+      {
+        "ID": "O6",
+        "STATUS": "O",
+        "AMOUNT": 99.99,
+        "STATUS_text": "open"
+      }
+    ],
+    "error": null
+  },
+  {
+    "id": "old-04-exists-to-many",
+    "nl": "Customers who have at least one open order",
+    "descriptor": {
+      "entity": "Customers",
+      "select": [
+        "ID",
+        "NAME"
+      ],
+      "where": [
+        {
+          "exists": "orders",
+          "where": [
+            {
+              "col": "STATUS",
+              "op": "=",
+              "val": "O"
+            }
+          ]
+        }
+      ]
+    },
+    "cqn": [
+      {
+        "SELECT": {
+          "from": {
+            "ref": [
+              "capdemo.Customers"
+            ]
+          },
+          "columns": [
+            {
+              "ref": [
+                "ID"
+              ]
+            },
+            {
+              "ref": [
+                "NAME"
+              ]
+            }
+          ],
+          "where": [
+            {
+              "xpr": [
+                "exists",
+                {
+                  "ref": [
+                    {
+                      "id": "orders",
+                      "where": [
+                        {
+                          "ref": [
+                            "STATUS"
+                          ]
+                        },
+                        "=",
+                        {
+                          "val": "O"
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            }
+          ],
+          "limit": {
+            "rows": {
+              "val": 50
+            },
+            "offset": {
+              "val": 0
+            }
+          }
+        }
+      }
+    ],
+    "sql": [
+      "SELECT \"$C\".ID,\"$C\".NAME FROM capdemo_Customers as \"$C\" WHERE (exists (SELECT 1 as \"1\" FROM capdemo_Orders as \"$o\" WHERE \"$o\".CUSTOMER_ID = \"$C\".ID and \"$o\".STATUS = ?)) LIMIT ? OFFSET ?"
+    ],
+    "rows": [
+      {
+        "ID": "C1",
+        "NAME": "Acme Corp"
+      },
+      {
+        "ID": "C2",
+        "NAME": "Globex Inc"
+      },
+      {
+        "ID": "C3",
+        "NAME": "Initech"
+      }
+    ],
+    "error": null
+  },
+  {
+    "id": "old-05-not-exists",
+    "nl": "Customers who have never placed an order",
+    "descriptor": {
+      "entity": "Customers",
+      "select": [
+        "ID",
+        "NAME"
+      ],
+      "where": [
+        {
+          "notExists": "orders"
+        }
+      ]
+    },
+    "cqn": [
+      {
+        "SELECT": {
+          "from": {
+            "ref": [
+              "capdemo.Customers"
+            ]
+          },
+          "columns": [
+            {
+              "ref": [
+                "ID"
+              ]
+            },
+            {
+              "ref": [
+                "NAME"
+              ]
+            }
+          ],
+          "where": [
+            {
+              "xpr": [
+                "not",
+                "exists",
+                {
+                  "ref": [
+                    "orders"
+                  ]
+                }
+              ]
+            }
+          ],
+          "limit": {
+            "rows": {
+              "val": 50
+            },
+            "offset": {
+              "val": 0
+            }
+          }
+        }
+      }
+    ],
+    "sql": [
+      "SELECT \"$C\".ID,\"$C\".NAME FROM capdemo_Customers as \"$C\" WHERE (not exists (SELECT 1 as \"1\" FROM capdemo_Orders as \"$o\" WHERE \"$o\".CUSTOMER_ID = \"$C\".ID)) LIMIT ? OFFSET ?"
+    ],
+    "rows": [
+      {
+        "ID": "C4",
+        "NAME": "Umbrella LLC"
+      }
+    ],
+    "error": null
+  },
+  {
+    "id": "old-06-pagination-offset",
+    "nl": "Second page of orders, 2 per page, ordered by ID",
+    "descriptor": {
+      "entity": "Orders",
+      "select": [
+        "ID",
+        "AMOUNT"
+      ],
+      "orderBy": "ID",
+      "orderDir": "ASC",
+      "limit": 2,
+      "offset": 2
+    },
+    "cqn": [
+      {
+        "SELECT": {
+          "from": {
+            "ref": [
+              "capdemo.Orders"
+            ]
+          },
+          "columns": [
+            {
+              "ref": [
+                "ID"
+              ]
+            },
+            {
+              "ref": [
+                "AMOUNT"
+              ]
+            }
+          ],
+          "orderBy": [
+            {
+              "ref": [
+                "ID"
+              ],
+              "sort": "asc"
+            }
+          ],
+          "limit": {
+            "rows": {
+              "val": 2
+            },
+            "offset": {
+              "val": 2
+            }
+          }
+        }
+      }
+    ],
+    "sql": [
+      "SELECT \"$O\".ID as ID,\"$O\".AMOUNT FROM capdemo_Orders as \"$O\" ORDER BY ID ASC LIMIT ? OFFSET ?"
+    ],
+    "rows": [
+      {
+        "ID": "O3",
+        "AMOUNT": 800
+      },
+      {
+        "ID": "O4",
+        "AMOUNT": 4200
+      }
+    ],
+    "error": null
+  },
+  {
+    "id": "old-07-valuelist-text-join",
+    "nl": "Loans with their sector description",
+    "descriptor": {
+      "entity": "Loans",
+      "select": [
+        "ID",
+        "SECTOR",
+        "sector.DESCRIPTION"
+      ]
+    },
+    "cqn": [
+      {
+        "SELECT": {
+          "from": {
+            "ref": [
+              "capdemo.Loans"
+            ]
+          },
+          "columns": [
+            {
+              "ref": [
+                "ID"
+              ]
+            },
+            {
+              "ref": [
+                "SECTOR"
+              ]
+            },
+            {
+              "ref": [
+                "sector",
+                "DESCRIPTION"
+              ]
+            }
+          ],
+          "limit": {
+            "rows": {
+              "val": 50
+            },
+            "offset": {
+              "val": 0
+            }
+          }
+        }
+      }
+    ],
+    "sql": [
+      "SELECT \"$L\".ID,\"$L\".SECTOR,sector.DESCRIPTION as sector_DESCRIPTION FROM capdemo_Loans as \"$L\" left JOIN capdemo_Sectors as sector ON sector.CODE = \"$L\".SECTOR LIMIT ? OFFSET ?"
+    ],
+    "rows": [
+      {
+        "ID": "L1",
+        "SECTOR": "RET",
+        "sector_DESCRIPTION": "Retail"
+      },
+      {
+        "ID": "L2",
+        "SECTOR": "TEC",
+        "sector_DESCRIPTION": "Technology"
+      },
+      {
+        "ID": "L3",
+        "SECTOR": "AGR",
+        "sector_DESCRIPTION": "Agriculture"
+      }
+    ],
+    "error": null
+  },
+  {
+    "id": "old-08-semantics-amount-currency-pair",
+    "nl": "Order amounts with their currency",
+    "descriptor": {
+      "entity": "Orders",
+      "select": [
+        "ID",
+        "AMOUNT",
+        "CURRENCY"
+      ]
+    },
+    "cqn": [
+      {
+        "SELECT": {
+          "from": {
+            "ref": [
+              "capdemo.Orders"
+            ]
+          },
+          "columns": [
+            {
+              "ref": [
+                "ID"
+              ]
+            },
+            {
+              "ref": [
+                "AMOUNT"
+              ]
+            },
+            {
+              "ref": [
+                "CURRENCY"
+              ]
+            }
+          ],
+          "limit": {
+            "rows": {
+              "val": 50
+            },
+            "offset": {
+              "val": 0
+            }
+          }
+        }
+      }
+    ],
+    "sql": [
+      "SELECT \"$O\".ID,\"$O\".AMOUNT,\"$O\".CURRENCY FROM capdemo_Orders as \"$O\" LIMIT ? OFFSET ?"
+    ],
+    "rows": [
+      {
+        "ID": "O1",
+        "AMOUNT": 1500,
+        "CURRENCY": "USD"
+      },
+      {
+        "ID": "O2",
+        "AMOUNT": 2300.5,
+        "CURRENCY": "USD"
+      },
+      {
+        "ID": "O3",
+        "AMOUNT": 800,
+        "CURRENCY": "EUR"
+      },
+      {
+        "ID": "O4",
+        "AMOUNT": 4200,
+        "CURRENCY": "EUR"
+      },
+      {
+        "ID": "O5",
+        "AMOUNT": 150,
+        "CURRENCY": "USD"
+      },
+      {
+        "ID": "O6",
+        "AMOUNT": 99.99,
+        "CURRENCY": "USD"
+      }
+    ],
+    "error": null
+  },
+  {
+    "id": "old-09-assert-range-outlier",
+    "nl": "Loans with a debt-to-income ratio above the normal 0-50 range",
+    "descriptor": {
+      "entity": "Loans",
+      "select": [
+        "ID",
+        "DTI"
+      ],
+      "where": [
+        {
+          "col": "DTI",
+          "op": ">",
+          "val": 50
+        }
+      ]
+    },
+    "cqn": [
+      {
+        "SELECT": {
+          "from": {
+            "ref": [
+              "capdemo.Loans"
+            ]
+          },
+          "columns": [
+            {
+              "ref": [
+                "ID"
+              ]
+            },
+            {
+              "ref": [
+                "DTI"
+              ]
+            }
+          ],
+          "where": [
+            {
+              "ref": [
+                "DTI"
+              ]
+            },
+            ">",
+            {
+              "val": 50
+            }
+          ],
+          "limit": {
+            "rows": {
+              "val": 50
+            },
+            "offset": {
+              "val": 0
+            }
+          }
+        }
+      }
+    ],
+    "sql": [
+      "SELECT \"$L\".ID,\"$L\".DTI FROM capdemo_Loans as \"$L\" WHERE \"$L\".DTI > ? LIMIT ? OFFSET ?"
+    ],
+    "rows": [
+      {
+        "ID": "L3",
+        "DTI": 55
+      }
+    ],
+    "error": null
+  },
+  {
+    "id": "old-10-cds-search",
+    "nl": "Search customers for \"acme\"",
+    "descriptor": {
+      "entity": "Customers",
+      "select": [
+        "ID",
+        "NAME",
+        "NOTES"
+      ],
+      "search": "acme"
+    },
+    "cqn": [
+      {
+        "SELECT": {
+          "from": {
+            "ref": [
+              "capdemo.Customers"
+            ]
+          },
+          "columns": [
+            {
+              "ref": [
+                "ID"
+              ]
+            },
+            {
+              "ref": [
+                "NAME"
+              ]
+            },
+            {
+              "ref": [
+                "NOTES"
+              ]
+            }
+          ],
+          "where": [
+            {
+              "xpr": [
+                {
+                  "func": "upper",
+                  "args": [
+                    {
+                      "ref": [
+                        "NAME"
+                      ]
+                    }
+                  ]
+                },
+                "like",
+                {
+                  "val": "%ACME%"
+                },
+                "or",
+                {
+                  "func": "upper",
+                  "args": [
+                    {
+                      "ref": [
+                        "NOTES"
+                      ]
+                    }
+                  ]
+                },
+                "like",
+                {
+                  "val": "%ACME%"
+                }
+              ]
+            }
+          ],
+          "limit": {
+            "rows": {
+              "val": 50
+            },
+            "offset": {
+              "val": 0
+            }
+          }
+        }
+      }
+    ],
+    "sql": [
+      "SELECT \"$C\".ID,\"$C\".NAME,\"$C\".NOTES FROM capdemo_Customers as \"$C\" WHERE (upper(\"$C\".NAME) like ? or upper(\"$C\".NOTES) like ?) LIMIT ? OFFSET ?"
+    ],
+    "rows": [
+      {
+        "ID": "C1",
+        "NAME": "Acme Corp",
+        "NOTES": "Long-standing enterprise account"
+      }
+    ],
+    "error": null
+  },
+  {
+    "id": "old-11-enum-text-translation",
+    "nl": "Orders with their status (raw code and business term)",
+    "descriptor": {
+      "entity": "Orders",
+      "select": [
+        "ID",
+        "STATUS"
+      ]
+    },
+    "cqn": [
+      {
+        "SELECT": {
+          "from": {
+            "ref": [
+              "capdemo.Orders"
+            ]
+          },
+          "columns": [
+            {
+              "ref": [
+                "ID"
+              ]
+            },
+            {
+              "ref": [
+                "STATUS"
+              ]
+            }
+          ],
+          "limit": {
+            "rows": {
+              "val": 50
+            },
+            "offset": {
+              "val": 0
+            }
+          }
+        }
+      }
+    ],
+    "sql": [
+      "SELECT \"$O\".ID,\"$O\".STATUS FROM capdemo_Orders as \"$O\" LIMIT ? OFFSET ?"
+    ],
+    "rows": [
+      {
+        "ID": "O1",
+        "STATUS": "O",
+        "STATUS_text": "open"
+      },
+      {
+        "ID": "O2",
+        "STATUS": "C",
+        "STATUS_text": "closed"
+      },
+      {
+        "ID": "O3",
+        "STATUS": "O",
+        "STATUS_text": "open"
+      },
+      {
+        "ID": "O4",
+        "STATUS": "C",
+        "STATUS_text": "closed"
+      },
+      {
+        "ID": "O5",
+        "STATUS": "O",
+        "STATUS_text": "open"
+      },
+      {
+        "ID": "O6",
+        "STATUS": "O",
+        "STATUS_text": "open"
+      }
+    ],
+    "error": null
+  },
+  {
+    "id": "old-12-calculated-column",
+    "nl": "Customers' full names",
+    "descriptor": {
+      "entity": "Customers",
+      "select": [
+        "ID",
+        "FULL"
+      ]
+    },
+    "cqn": [
+      {
+        "SELECT": {
+          "from": {
+            "ref": [
+              "capdemo.Customers"
+            ]
+          },
+          "columns": [
+            {
+              "ref": [
+                "ID"
+              ]
+            },
+            {
+              "ref": [
+                "FULL"
+              ]
+            }
+          ],
+          "limit": {
+            "rows": {
+              "val": 50
+            },
+            "offset": {
+              "val": 0
+            }
+          }
+        }
+      }
+    ],
+    "sql": [
+      "SELECT \"$C\".ID,\"$C\".\"FIRST\" || ? || \"$C\".\"LAST\" as \"FULL\" FROM capdemo_Customers as \"$C\" LIMIT ? OFFSET ?"
+    ],
+    "rows": [
+      {
+        "ID": "C1",
+        "FULL": "Alice Anderson"
+      },
+      {
+        "ID": "C2",
+        "FULL": "Bob Brown"
+      },
+      {
+        "ID": "C3",
+        "FULL": "Carol Clark"
+      },
+      {
+        "ID": "C4",
+        "FULL": "Dana Diaz"
+      }
+    ],
+    "error": null
+  },
+  {
+    "id": "old-13-having",
+    "nl": "Customers with more than 1 order",
+    "descriptor": {
+      "entity": "Orders",
+      "select": [
+        "CUSTOMER_ID"
+      ],
+      "aggregate": [
+        {
+          "fn": "count",
+          "col": "ID",
+          "as": "ORDER_COUNT"
+        }
+      ],
+      "groupBy": [
+        "CUSTOMER_ID"
+      ],
+      "having": [
+        {
+          "fn": "count",
+          "col": "ID",
+          "op": ">",
+          "val": 1
+        }
+      ]
+    },
+    "cqn": [
+      {
+        "SELECT": {
+          "from": {
+            "ref": [
+              "capdemo.Orders"
+            ]
+          },
+          "columns": [
+            {
+              "ref": [
+                "CUSTOMER_ID"
+              ]
+            },
+            {
+              "func": "count",
+              "args": [
+                {
+                  "ref": [
+                    "ID"
+                  ]
+                }
+              ],
+              "as": "ORDER_COUNT"
+            }
+          ],
+          "groupBy": [
+            {
+              "ref": [
+                "CUSTOMER_ID"
+              ]
+            }
+          ],
+          "having": [
+            {
+              "func": "count",
+              "args": [
+                {
+                  "ref": [
+                    "ID"
+                  ]
+                }
+              ],
+              "as": "count_ID"
+            },
+            ">",
+            {
+              "val": 1
+            }
+          ],
+          "limit": {
+            "rows": {
+              "val": 50
+            },
+            "offset": {
+              "val": 0
+            }
+          }
+        }
+      }
+    ],
+    "sql": [
+      "SELECT \"$O\".CUSTOMER_ID,count(\"$O\".ID) as ORDER_COUNT FROM capdemo_Orders as \"$O\" GROUP BY \"$O\".CUSTOMER_ID HAVING count(\"$O\".ID) > ? LIMIT ? OFFSET ?"
+    ],
+    "rows": [
+      {
+        "CUSTOMER_ID": "C1",
+        "ORDER_COUNT": 3
+      },
+      {
+        "CUSTOMER_ID": "C2",
+        "ORDER_COUNT": 2
+      }
+    ],
+    "error": null
+  },
+  {
+    "id": "old-14-date-within-days",
+    "nl": "Orders placed in the last 60 days (relative to today)",
+    "descriptor": {
+      "entity": "Orders",
+      "select": [
+        "ID",
+        "ORDER_DATE"
+      ],
+      "where": [
+        {
+          "col": "ORDER_DATE",
+          "op": "days_ago",
+          "val": 60
+        }
+      ]
+    },
+    "cqn": [
+      {
+        "SELECT": {
+          "from": {
+            "ref": [
+              "capdemo.Orders"
+            ]
+          },
+          "columns": [
+            {
+              "ref": [
+                "ID"
+              ]
+            },
+            {
+              "ref": [
+                "ORDER_DATE"
+              ]
+            }
+          ],
+          "where": [
+            {
+              "ref": [
+                "ORDER_DATE"
+              ]
+            },
+            ">=",
+            {
+              "val": "2026-04-22"
+            },
+            "and",
+            {
+              "ref": [
+                "ORDER_DATE"
+              ]
+            },
+            "<=",
+            {
+              "val": "2026-06-21"
+            }
+          ],
+          "limit": {
+            "rows": {
+              "val": 50
+            },
+            "offset": {
+              "val": 0
+            }
+          }
+        }
+      }
+    ],
+    "sql": [
+      "SELECT \"$O\".ID,\"$O\".ORDER_DATE FROM capdemo_Orders as \"$O\" WHERE \"$O\".ORDER_DATE >= ? and \"$O\".ORDER_DATE <= ? LIMIT ? OFFSET ?"
+    ],
+    "rows": [
+      {
+        "ID": "O1",
+        "ORDER_DATE": "2026-05-01"
+      },
+      {
+        "ID": "O2",
+        "ORDER_DATE": "2026-05-10"
+      },
+      {
+        "ID": "O3",
+        "ORDER_DATE": "2026-05-15"
+      },
+      {
+        "ID": "O5",
+        "ORDER_DATE": "2026-06-01"
+      },
+      {
+        "ID": "O6",
+        "ORDER_DATE": "2026-06-10"
+      }
+    ],
+    "error": null
+  },
+  {
+    "id": "old-15-persistence-skip-rejected",
+    "nl": "Show internal audit notes (entity is excluded from schema discovery)",
+    "descriptor": {
+      "entity": "InternalAudit",
+      "select": [
+        "ID",
+        "NOTE"
+      ]
+    },
+    "cqn": null,
+    "sql": null,
+    "rows": null,
+    "error": "Unknown entity \"InternalAudit\". Known: Customers, Orders, OrderItems, Accounts, Sectors, Loans"
+  },
+  {
+    "id": "new-01-hierarchy-descendants",
+    "nl": "All descendants of account A1 (the full org tree below it)",
+    "descriptor": {
+      "entity": "Accounts",
+      "select": [
+        "ID",
+        "NAME",
+        "PARENT_ID"
+      ],
+      "hierarchy": {
+        "assoc": "children",
+        "direction": "descendants",
+        "startWhere": [
+          {
+            "col": "ID",
+            "op": "=",
+            "val": "A1"
+          }
+        ]
+      }
+    },
+    "cqn": [
+      {
+        "SELECT": {
+          "from": {
+            "ref": [
+              "capdemo.Accounts"
+            ]
+          },
+          "columns": [
+            {
+              "ref": [
+                "ID"
+              ]
+            },
+            {
+              "ref": [
+                "PARENT_ID"
+              ]
+            },
+            {
+              "ref": [
+                "NAME"
+              ]
+            }
+          ],
+          "where": [
+            {
+              "ref": [
+                "ID"
+              ]
+            },
+            "=",
+            {
+              "val": "A1"
+            }
+          ],
+          "limit": {
+            "rows": {
+              "val": 51
+            }
+          }
+        }
+      },
+      {
+        "SELECT": {
+          "from": {
+            "ref": [
+              "capdemo.Accounts"
+            ]
+          },
+          "columns": [
+            {
+              "ref": [
+                "ID"
+              ]
+            },
+            {
+              "ref": [
+                "PARENT_ID"
+              ]
+            },
+            {
+              "ref": [
+                "NAME"
+              ]
+            }
+          ],
+          "where": [
+            {
+              "ref": [
+                "PARENT_ID"
+              ]
+            },
+            "in",
+            {
+              "list": [
+                {
+                  "val": "A1"
+                }
+              ]
+            }
+          ],
+          "limit": {
+            "rows": {
+              "val": 50
+            }
+          }
+        }
+      },
+      {
+        "SELECT": {
+          "from": {
+            "ref": [
+              "capdemo.Accounts"
+            ]
+          },
+          "columns": [
+            {
+              "ref": [
+                "ID"
+              ]
+            },
+            {
+              "ref": [
+                "PARENT_ID"
+              ]
+            },
+            {
+              "ref": [
+                "NAME"
+              ]
+            }
+          ],
+          "where": [
+            {
+              "ref": [
+                "PARENT_ID"
+              ]
+            },
+            "in",
+            {
+              "list": [
+                {
+                  "val": "A2"
+                }
+              ]
+            }
+          ],
+          "limit": {
+            "rows": {
+              "val": 49
+            }
+          }
+        }
+      },
+      {
+        "SELECT": {
+          "from": {
+            "ref": [
+              "capdemo.Accounts"
+            ]
+          },
+          "columns": [
+            {
+              "ref": [
+                "ID"
+              ]
+            },
+            {
+              "ref": [
+                "PARENT_ID"
+              ]
+            },
+            {
+              "ref": [
+                "NAME"
+              ]
+            }
+          ],
+          "where": [
+            {
+              "ref": [
+                "PARENT_ID"
+              ]
+            },
+            "in",
+            {
+              "list": [
+                {
+                  "val": "A3"
+                },
+                {
+                  "val": "A4"
+                }
+              ]
+            }
+          ],
+          "limit": {
+            "rows": {
+              "val": 47
+            }
+          }
+        }
+      },
+      {
+        "SELECT": {
+          "from": {
+            "ref": [
+              "capdemo.Accounts"
+            ]
+          },
+          "columns": [
+            {
+              "ref": [
+                "ID"
+              ]
+            },
+            {
+              "ref": [
+                "PARENT_ID"
+              ]
+            },
+            {
+              "ref": [
+                "NAME"
+              ]
+            }
+          ],
+          "where": [
+            {
+              "ref": [
+                "PARENT_ID"
+              ]
+            },
+            "in",
+            {
+              "list": [
+                {
+                  "val": "A5"
+                }
+              ]
+            }
+          ],
+          "limit": {
+            "rows": {
+              "val": 46
+            }
+          }
+        }
+      }
+    ],
+    "sql": [
+      "SELECT \"$A\".ID,\"$A\".PARENT_ID,\"$A\".NAME FROM capdemo_Accounts as \"$A\" WHERE \"$A\".ID = ? LIMIT ?",
+      "SELECT \"$A\".ID,\"$A\".PARENT_ID,\"$A\".NAME FROM capdemo_Accounts as \"$A\" WHERE \"$A\".PARENT_ID in (?) LIMIT ?",
+      "SELECT \"$A\".ID,\"$A\".PARENT_ID,\"$A\".NAME FROM capdemo_Accounts as \"$A\" WHERE \"$A\".PARENT_ID in (?) LIMIT ?",
+      "SELECT \"$A\".ID,\"$A\".PARENT_ID,\"$A\".NAME FROM capdemo_Accounts as \"$A\" WHERE \"$A\".PARENT_ID in (?,?) LIMIT ?",
+      "SELECT \"$A\".ID,\"$A\".PARENT_ID,\"$A\".NAME FROM capdemo_Accounts as \"$A\" WHERE \"$A\".PARENT_ID in (?) LIMIT ?"
+    ],
+    "rows": [
+      {
+        "ID": "A1",
+        "NAME": "Holding Co",
+        "PARENT_ID": null
+      },
+      {
+        "ID": "A2",
+        "NAME": "Regional Division",
+        "PARENT_ID": "A1"
+      },
+      {
+        "ID": "A3",
+        "NAME": "Local Branch North",
+        "PARENT_ID": "A2"
+      },
+      {
+        "ID": "A4",
+        "NAME": "Local Branch South",
+        "PARENT_ID": "A2"
+      },
+      {
+        "ID": "A5",
+        "NAME": "Sub Branch North-1",
+        "PARENT_ID": "A3"
+      }
+    ],
+    "error": null
+  },
+  {
+    "id": "new-02-hierarchy-ancestors",
+    "nl": "The full ancestor chain above account A5",
+    "descriptor": {
+      "entity": "Accounts",
+      "select": [
+        "ID",
+        "NAME",
+        "PARENT_ID"
+      ],
+      "hierarchy": {
+        "assoc": "parent",
+        "direction": "ancestors",
+        "startWhere": [
+          {
+            "col": "ID",
+            "op": "=",
+            "val": "A5"
+          }
+        ]
+      }
+    },
+    "cqn": [
+      {
+        "SELECT": {
+          "from": {
+            "ref": [
+              "capdemo.Accounts"
+            ]
+          },
+          "columns": [
+            {
+              "ref": [
+                "PARENT_ID"
+              ]
+            },
+            {
+              "ref": [
+                "ID"
+              ]
+            },
+            {
+              "ref": [
+                "NAME"
+              ]
+            }
+          ],
+          "where": [
+            {
+              "ref": [
+                "ID"
+              ]
+            },
+            "=",
+            {
+              "val": "A5"
+            }
+          ],
+          "limit": {
+            "rows": {
+              "val": 51
+            }
+          }
+        }
+      },
+      {
+        "SELECT": {
+          "from": {
+            "ref": [
+              "capdemo.Accounts"
+            ]
+          },
+          "columns": [
+            {
+              "ref": [
+                "PARENT_ID"
+              ]
+            },
+            {
+              "ref": [
+                "ID"
+              ]
+            },
+            {
+              "ref": [
+                "NAME"
+              ]
+            }
+          ],
+          "where": [
+            {
+              "ref": [
+                "ID"
+              ]
+            },
+            "in",
+            {
+              "list": [
+                {
+                  "val": "A3"
+                }
+              ]
+            }
+          ],
+          "limit": {
+            "rows": {
+              "val": 50
+            }
+          }
+        }
+      },
+      {
+        "SELECT": {
+          "from": {
+            "ref": [
+              "capdemo.Accounts"
+            ]
+          },
+          "columns": [
+            {
+              "ref": [
+                "PARENT_ID"
+              ]
+            },
+            {
+              "ref": [
+                "ID"
+              ]
+            },
+            {
+              "ref": [
+                "NAME"
+              ]
+            }
+          ],
+          "where": [
+            {
+              "ref": [
+                "ID"
+              ]
+            },
+            "in",
+            {
+              "list": [
+                {
+                  "val": "A2"
+                }
+              ]
+            }
+          ],
+          "limit": {
+            "rows": {
+              "val": 49
+            }
+          }
+        }
+      },
+      {
+        "SELECT": {
+          "from": {
+            "ref": [
+              "capdemo.Accounts"
+            ]
+          },
+          "columns": [
+            {
+              "ref": [
+                "PARENT_ID"
+              ]
+            },
+            {
+              "ref": [
+                "ID"
+              ]
+            },
+            {
+              "ref": [
+                "NAME"
+              ]
+            }
+          ],
+          "where": [
+            {
+              "ref": [
+                "ID"
+              ]
+            },
+            "in",
+            {
+              "list": [
+                {
+                  "val": "A1"
+                }
+              ]
+            }
+          ],
+          "limit": {
+            "rows": {
+              "val": 48
+            }
+          }
+        }
+      }
+    ],
+    "sql": [
+      "SELECT \"$A\".PARENT_ID,\"$A\".ID,\"$A\".NAME FROM capdemo_Accounts as \"$A\" WHERE \"$A\".ID = ? LIMIT ?",
+      "SELECT \"$A\".PARENT_ID,\"$A\".ID,\"$A\".NAME FROM capdemo_Accounts as \"$A\" WHERE \"$A\".ID in (?) LIMIT ?",
+      "SELECT \"$A\".PARENT_ID,\"$A\".ID,\"$A\".NAME FROM capdemo_Accounts as \"$A\" WHERE \"$A\".ID in (?) LIMIT ?",
+      "SELECT \"$A\".PARENT_ID,\"$A\".ID,\"$A\".NAME FROM capdemo_Accounts as \"$A\" WHERE \"$A\".ID in (?) LIMIT ?"
+    ],
+    "rows": [
+      {
+        "ID": "A5",
+        "NAME": "Sub Branch North-1",
+        "PARENT_ID": "A3"
+      },
+      {
+        "ID": "A3",
+        "NAME": "Local Branch North",
+        "PARENT_ID": "A2"
+      },
+      {
+        "ID": "A2",
+        "NAME": "Regional Division",
+        "PARENT_ID": "A1"
+      },
+      {
+        "ID": "A1",
+        "NAME": "Holding Co",
+        "PARENT_ID": null
+      }
+    ],
+    "error": null
+  },
+  {
+    "id": "new-03-expand-composition",
+    "nl": "Orders with their line items nested",
+    "descriptor": {
+      "entity": "Orders",
+      "select": [
+        "ID",
+        "CUSTOMER_ID"
+      ],
+      "expand": [
+        {
+          "assoc": "items",
+          "select": [
+            "PRODUCT",
+            "QTY"
+          ]
+        }
+      ]
+    },
+    "cqn": [
+      {
+        "SELECT": {
+          "from": {
+            "ref": [
+              "capdemo.Orders"
+            ]
+          },
+          "columns": [
+            {
+              "ref": [
+                "ID"
+              ]
+            },
+            {
+              "ref": [
+                "CUSTOMER_ID"
+              ]
+            },
+            {
+              "ref": [
+                "items"
+              ],
+              "expand": [
+                {
+                  "ref": [
+                    "PRODUCT"
+                  ]
+                },
+                {
+                  "ref": [
+                    "QTY"
+                  ]
+                }
+              ],
+              "limit": {
+                "rows": {
+                  "val": 20
+                }
+              }
+            }
+          ],
+          "limit": {
+            "rows": {
+              "val": 50
+            },
+            "offset": {
+              "val": 0
+            }
+          }
+        }
+      }
+    ],
+    "sql": [
+      "SELECT \"$O\".ID,\"$O\".CUSTOMER_ID,(SELECT jsonb_group_array(jsonb_insert('{}','$.\"PRODUCT\"',PRODUCT,'$.\"QTY\"',QTY)) as _json_ FROM (SELECT \"$i\".PRODUCT,\"$i\".QTY FROM capdemo_OrderItems as \"$i\" WHERE \"$i\".ORDER_ID = \"$O\".ID LIMIT ?)) as items FROM capdemo_Orders as \"$O\" LIMIT ? OFFSET ?"
+    ],
+    "rows": [
+      {
+        "ID": "O1",
+        "CUSTOMER_ID": "C1",
+        "items": [
+          {
+            "PRODUCT": "Widget",
+            "QTY": 10
+          },
+          {
+            "PRODUCT": "Gadget",
+            "QTY": 5
+          }
+        ]
+      },
+      {
+        "ID": "O2",
+        "CUSTOMER_ID": "C1",
+        "items": [
+          {
+            "PRODUCT": "Widget",
+            "QTY": 20
+          }
+        ]
+      },
+      {
+        "ID": "O3",
+        "CUSTOMER_ID": "C2",
+        "items": [
+          {
+            "PRODUCT": "Gizmo",
+            "QTY": 3
+          }
+        ]
+      },
+      {
+        "ID": "O4",
+        "CUSTOMER_ID": "C2",
+        "items": []
+      },
+      {
+        "ID": "O5",
+        "CUSTOMER_ID": "C3",
+        "items": [
+          {
+            "PRODUCT": "Widget",
+            "QTY": 1
+          }
+        ]
+      },
+      {
+        "ID": "O6",
+        "CUSTOMER_ID": "C1",
+        "items": []
+      }
+    ],
+    "error": null
+  },
+  {
+    "id": "new-04-via-filtered-aggregate",
+    "nl": "Total amount of OPEN orders per customer (filtering inside the join, not the outer rows)",
+    "descriptor": {
+      "entity": "Customers",
+      "select": [
+        "ID",
+        "NAME"
+      ],
+      "aggregate": [
+        {
+          "fn": "sum",
+          "col": {
+            "col": "AMOUNT",
+            "viaFiltered": {
+              "assoc": "orders",
+              "where": [
+                {
+                  "col": "STATUS",
+                  "op": "=",
+                  "val": "O"
+                }
+              ]
+            }
+          },
+          "as": "OPEN_ORDERS_TOTAL"
+        }
+      ],
+      "groupBy": [
+        "ID",
+        "NAME"
+      ]
+    },
+    "cqn": [
+      {
+        "SELECT": {
+          "from": {
+            "ref": [
+              "capdemo.Customers"
+            ]
+          },
+          "columns": [
+            {
+              "ref": [
+                "ID"
+              ]
+            },
+            {
+              "ref": [
+                "NAME"
+              ]
+            },
+            {
+              "func": "sum",
+              "args": [
+                {
+                  "ref": [
+                    {
+                      "id": "orders",
+                      "where": [
+                        {
+                          "ref": [
+                            "STATUS"
+                          ]
+                        },
+                        "=",
+                        {
+                          "val": "O"
+                        }
+                      ]
+                    },
+                    "AMOUNT"
+                  ]
+                }
+              ],
+              "as": "OPEN_ORDERS_TOTAL"
+            }
+          ],
+          "groupBy": [
+            {
+              "ref": [
+                "ID"
+              ]
+            },
+            {
+              "ref": [
+                "NAME"
+              ]
+            }
+          ],
+          "limit": {
+            "rows": {
+              "val": 50
+            },
+            "offset": {
+              "val": 0
+            }
+          }
+        }
+      }
+    ],
+    "sql": [
+      "SELECT \"$C\".ID,\"$C\".NAME,sum(orders.AMOUNT) as OPEN_ORDERS_TOTAL FROM capdemo_Customers as \"$C\" left JOIN capdemo_Orders as orders ON orders.CUSTOMER_ID = \"$C\".ID and orders.STATUS = ? GROUP BY \"$C\".ID,\"$C\".NAME LIMIT ? OFFSET ?"
+    ],
+    "rows": [
+      {
+        "ID": "C1",
+        "NAME": "Acme Corp",
+        "OPEN_ORDERS_TOTAL": 1599.99
+      },
+      {
+        "ID": "C2",
+        "NAME": "Globex Inc",
+        "OPEN_ORDERS_TOTAL": 800
+      },
+      {
+        "ID": "C3",
+        "NAME": "Initech",
+        "OPEN_ORDERS_TOTAL": 150
+      },
+      {
+        "ID": "C4",
+        "NAME": "Umbrella LLC",
+        "OPEN_ORDERS_TOTAL": null
+      }
+    ],
+    "error": null
+  },
+  {
+    "id": "new-05-window-rank-per-partition",
+    "nl": "Rank each order by amount within its customer (highest first)",
+    "descriptor": {
+      "entity": "Orders",
+      "select": [
+        "ID",
+        "CUSTOMER_ID",
+        "AMOUNT"
+      ],
+      "window": [
+        {
+          "fn": "rank",
+          "as": "RANK_IN_CUSTOMER",
+          "partitionBy": [
+            "CUSTOMER_ID"
+          ],
+          "orderBy": [
+            {
+              "col": "AMOUNT",
+              "dir": "DESC"
+            }
+          ]
+        }
+      ]
+    },
+    "cqn": [
+      {
+        "SELECT": {
+          "from": {
+            "ref": [
+              "capdemo.Orders"
+            ]
+          },
+          "columns": [
+            {
+              "ref": [
+                "ID"
+              ]
+            },
+            {
+              "ref": [
+                "CUSTOMER_ID"
+              ]
+            },
+            {
+              "ref": [
+                "AMOUNT"
+              ]
+            },
+            {
+              "func": "rank",
+              "args": [],
+              "xpr": [
+                "over",
+                {
+                  "xpr": [
+                    "partition",
+                    "by",
+                    {
+                      "ref": [
+                        "CUSTOMER_ID"
+                      ]
+                    },
+                    "order",
+                    "by",
+                    {
+                      "ref": [
+                        "AMOUNT"
+                      ]
+                    },
+                    "desc"
+                  ]
+                }
+              ],
+              "as": "RANK_IN_CUSTOMER"
+            }
+          ],
+          "limit": {
+            "rows": {
+              "val": 50
+            },
+            "offset": {
+              "val": 0
+            }
+          }
+        }
+      }
+    ],
+    "sql": [
+      "SELECT \"$O\".ID,\"$O\".CUSTOMER_ID,\"$O\".AMOUNT,rank() over (partition by \"$O\".CUSTOMER_ID order by \"$O\".AMOUNT desc) as RANK_IN_CUSTOMER FROM capdemo_Orders as \"$O\" LIMIT ? OFFSET ?"
+    ],
+    "rows": [
+      {
+        "ID": "O2",
+        "CUSTOMER_ID": "C1",
+        "AMOUNT": 2300.5,
+        "RANK_IN_CUSTOMER": 1
+      },
+      {
+        "ID": "O1",
+        "CUSTOMER_ID": "C1",
+        "AMOUNT": 1500,
+        "RANK_IN_CUSTOMER": 2
+      },
+      {
+        "ID": "O6",
+        "CUSTOMER_ID": "C1",
+        "AMOUNT": 99.99,
+        "RANK_IN_CUSTOMER": 3
+      },
+      {
+        "ID": "O4",
+        "CUSTOMER_ID": "C2",
+        "AMOUNT": 4200,
+        "RANK_IN_CUSTOMER": 1
+      },
+      {
+        "ID": "O3",
+        "CUSTOMER_ID": "C2",
+        "AMOUNT": 800,
+        "RANK_IN_CUSTOMER": 2
+      },
+      {
+        "ID": "O5",
+        "CUSTOMER_ID": "C3",
+        "AMOUNT": 150,
+        "RANK_IN_CUSTOMER": 1
+      }
+    ],
+    "error": null
+  },
+  {
+    "id": "new-06-window-filter-top-n-per-group",
+    "nl": "Each customer's single largest order (top 1 per group)",
+    "descriptor": {
+      "entity": "Orders",
+      "select": [
+        "ID",
+        "CUSTOMER_ID",
+        "AMOUNT"
+      ],
+      "window": [
+        {
+          "fn": "rank",
+          "as": "RANK_IN_CUSTOMER",
+          "partitionBy": [
+            "CUSTOMER_ID"
+          ],
+          "orderBy": [
+            {
+              "col": "AMOUNT",
+              "dir": "DESC"
+            }
+          ]
+        }
+      ],
+      "windowFilter": [
+        {
+          "col": "RANK_IN_CUSTOMER",
+          "op": "=",
+          "val": 1
+        }
+      ]
+    },
+    "cqn": [
+      {
+        "SELECT": {
+          "from": {
+            "SELECT": {
+              "from": {
+                "ref": [
+                  "capdemo.Orders"
+                ]
+              },
+              "columns": [
+                {
+                  "ref": [
+                    "ID"
+                  ]
+                },
+                {
+                  "ref": [
+                    "CUSTOMER_ID"
+                  ]
+                },
+                {
+                  "ref": [
+                    "AMOUNT"
+                  ]
+                },
+                {
+                  "func": "rank",
+                  "args": [],
+                  "xpr": [
+                    "over",
+                    {
+                      "xpr": [
+                        "partition",
+                        "by",
+                        {
+                          "ref": [
+                            "CUSTOMER_ID"
+                          ]
+                        },
+                        "order",
+                        "by",
+                        {
+                          "ref": [
+                            "AMOUNT"
+                          ]
+                        },
+                        "desc"
+                      ]
+                    }
+                  ],
+                  "as": "RANK_IN_CUSTOMER"
+                }
+              ]
+            }
+          },
+          "where": [
+            {
+              "ref": [
+                "RANK_IN_CUSTOMER"
+              ]
+            },
+            "=",
+            {
+              "val": 1
+            }
+          ],
+          "limit": {
+            "rows": {
+              "val": 50
+            },
+            "offset": {
+              "val": 0
+            }
+          }
+        }
+      }
+    ],
+    "sql": [
+      "SELECT __select__2.ID,__select__2.CUSTOMER_ID,__select__2.AMOUNT,__select__2.RANK_IN_CUSTOMER FROM (SELECT \"$O\".ID,\"$O\".CUSTOMER_ID,\"$O\".AMOUNT,rank() over (partition by \"$O\".CUSTOMER_ID order by \"$O\".AMOUNT desc) as RANK_IN_CUSTOMER FROM capdemo_Orders as \"$O\") as __select__2 WHERE __select__2.RANK_IN_CUSTOMER = ? LIMIT ? OFFSET ?"
+    ],
+    "rows": [
+      {
+        "ID": "O2",
+        "CUSTOMER_ID": "C1",
+        "AMOUNT": 2300.5,
+        "RANK_IN_CUSTOMER": 1
+      },
+      {
+        "ID": "O4",
+        "CUSTOMER_ID": "C2",
+        "AMOUNT": 4200,
+        "RANK_IN_CUSTOMER": 1
+      },
+      {
+        "ID": "O5",
+        "CUSTOMER_ID": "C3",
+        "AMOUNT": 150,
+        "RANK_IN_CUSTOMER": 1
+      }
+    ],
+    "error": null
+  },
+  {
+    "id": "new-07-window-running-total",
+    "nl": "Running total of order amount per customer, ordered by date",
+    "descriptor": {
+      "entity": "Orders",
+      "select": [
+        "ID",
+        "CUSTOMER_ID",
+        "ORDER_DATE",
+        "AMOUNT"
+      ],
+      "window": [
+        {
+          "fn": "sum",
+          "col": "AMOUNT",
+          "as": "RUNNING_TOTAL",
+          "partitionBy": [
+            "CUSTOMER_ID"
+          ],
+          "orderBy": [
+            {
+              "col": "ORDER_DATE",
+              "dir": "ASC"
+            }
+          ]
+        }
+      ]
+    },
+    "cqn": [
+      {
+        "SELECT": {
+          "from": {
+            "ref": [
+              "capdemo.Orders"
+            ]
+          },
+          "columns": [
+            {
+              "ref": [
+                "ID"
+              ]
+            },
+            {
+              "ref": [
+                "CUSTOMER_ID"
+              ]
+            },
+            {
+              "ref": [
+                "ORDER_DATE"
+              ]
+            },
+            {
+              "ref": [
+                "AMOUNT"
+              ]
+            },
+            {
+              "func": "sum",
+              "args": [
+                {
+                  "ref": [
+                    "AMOUNT"
+                  ]
+                }
+              ],
+              "xpr": [
+                "over",
+                {
+                  "xpr": [
+                    "partition",
+                    "by",
+                    {
+                      "ref": [
+                        "CUSTOMER_ID"
+                      ]
+                    },
+                    "order",
+                    "by",
+                    {
+                      "ref": [
+                        "ORDER_DATE"
+                      ]
+                    },
+                    "asc"
+                  ]
+                }
+              ],
+              "as": "RUNNING_TOTAL"
+            }
+          ],
+          "limit": {
+            "rows": {
+              "val": 50
+            },
+            "offset": {
+              "val": 0
+            }
+          }
+        }
+      }
+    ],
+    "sql": [
+      "SELECT \"$O\".ID,\"$O\".CUSTOMER_ID,\"$O\".ORDER_DATE,\"$O\".AMOUNT,sum(\"$O\".AMOUNT) over (partition by \"$O\".CUSTOMER_ID order by \"$O\".ORDER_DATE asc) as RUNNING_TOTAL FROM capdemo_Orders as \"$O\" LIMIT ? OFFSET ?"
+    ],
+    "rows": [
+      {
+        "ID": "O1",
+        "CUSTOMER_ID": "C1",
+        "ORDER_DATE": "2026-05-01",
+        "AMOUNT": 1500,
+        "RUNNING_TOTAL": 1500
+      },
+      {
+        "ID": "O2",
+        "CUSTOMER_ID": "C1",
+        "ORDER_DATE": "2026-05-10",
+        "AMOUNT": 2300.5,
+        "RUNNING_TOTAL": 3800.5
+      },
+      {
+        "ID": "O6",
+        "CUSTOMER_ID": "C1",
+        "ORDER_DATE": "2026-06-10",
+        "AMOUNT": 99.99,
+        "RUNNING_TOTAL": 3900.49
+      },
+      {
+        "ID": "O4",
+        "CUSTOMER_ID": "C2",
+        "ORDER_DATE": "2026-04-20",
+        "AMOUNT": 4200,
+        "RUNNING_TOTAL": 4200
+      },
+      {
+        "ID": "O3",
+        "CUSTOMER_ID": "C2",
+        "ORDER_DATE": "2026-05-15",
+        "AMOUNT": 800,
+        "RUNNING_TOTAL": 5000
+      },
+      {
+        "ID": "O5",
+        "CUSTOMER_ID": "C3",
+        "ORDER_DATE": "2026-06-01",
+        "AMOUNT": 150,
+        "RUNNING_TOTAL": 150
+      }
+    ],
+    "error": null
+  },
+  {
+    "id": "new-08-hierarchy-rejects-non-recursive-assoc",
+    "nl": "(validation demo) \"Hierarchy\" requested on a non-self-referencing association",
+    "descriptor": {
+      "entity": "Orders",
+      "select": [
+        "ID"
+      ],
+      "hierarchy": {
+        "assoc": "customer",
+        "direction": "descendants",
+        "startWhere": [
+          {
+            "col": "ID",
+            "op": "=",
+            "val": "O1"
+          }
+        ]
+      }
+    },
+    "cqn": null,
+    "sql": null,
+    "rows": null,
+    "error": "\"customer\" is not a self-referencing association — \"hierarchy\" requires one (see the schema's \"self-referencing — hierarchy\" marker)."
+  },
+  {
+    "id": "new-09-window-rejects-combo-with-aggregate",
+    "nl": "(validation demo) window function combined with aggregate/groupBy — rejected",
+    "descriptor": {
+      "entity": "Orders",
+      "select": [
+        "CUSTOMER_ID"
+      ],
+      "aggregate": [
+        {
+          "fn": "sum",
+          "col": "AMOUNT",
+          "as": "TOTAL"
+        }
+      ],
+      "groupBy": [
+        "CUSTOMER_ID"
+      ],
+      "window": [
+        {
+          "fn": "rank",
+          "as": "R",
+          "orderBy": [
+            {
+              "col": "AMOUNT"
+            }
+          ]
+        }
+      ]
+    },
+    "cqn": null,
+    "sql": null,
+    "rows": null,
+    "error": "\"window\" cannot be combined with aggregate, groupBy, having, or expand."
+  }
+]

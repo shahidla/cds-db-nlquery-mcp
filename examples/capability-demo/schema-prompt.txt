@@ -1,0 +1,17 @@
+Customers [Customers]
+  columns: ID:String, NAME:String["Customer Name"], NOTES:String, FIRST:String, LAST:String, FULL:String[calculated]
+  joins:   "orders"→Orders(ID=CUSTOMER_ID,LEFT,toMany)
+  searchable: NAME, NOTES
+Orders [Orders]
+  columns: ID:String, CUSTOMER_ID:String, AMOUNT:Decimal{pairs with CURRENCY — always select both together}, CURRENCY:String, STATUS:String{values: open="O",closed="C" — use the raw value in filters}, ORDER_DATE:Date
+  joins:   "customer"→Customers(CUSTOMER_ID=ID,INNER), "items"→OrderItems(ID=ORDER_ID,LEFT,toMany)
+OrderItems [OrderItems]
+  columns: ID:String, ORDER_ID:String, PRODUCT:String, QTY:Integer
+Accounts [Accounts]
+  columns: ID:String, NAME:String, PARENT_ID:String
+  joins:   "parent"→Accounts(PARENT_ID=ID,INNER){self-referencing — hierarchy}, "children"→Accounts(ID=PARENT_ID,LEFT,toMany){self-referencing — hierarchy}
+Sectors [Sectors]
+  columns: CODE:String, DESCRIPTION:String
+Loans [Loans]
+  columns: ID:String, DTI:Decimal[0..50], SECTOR:String{readable text available via "sector.DESCRIPTION" — include it in select to show the human-readable value, AND use this path (not the raw "SECTOR" column) when the question filters by a human term like "active"/"closed"/"overdue" rather than a raw code}
+  joins:   "sector"→Sectors(SECTOR=CODE,INNER)

@@ -44,11 +44,12 @@
     "@sap/cds": ">=7"
   },
   "dependencies": {
-    "@modelcontextprotocol/sdk": "^1.0.0",
     "@anthropic-ai/sdk": "^0.32.0",
+    "@modelcontextprotocol/sdk": "^1.0.0",
     "openai": "^4.70.0"
   },
   "devDependencies": {
+    "@cap-js/sqlite": "^1.11.1",
     "@sap/cds": "^8"
   }
 }
