@@ -1235,7 +1235,7 @@
     "cqn": null,
     "sql": null,
     "rows": null,
-    "error": "Unknown entity \"InternalAudit\". Known: Customers, Orders, OrderItems, Accounts, Sectors, Loans"
+    "error": "Unknown entity \"InternalAudit\". Known: Customers, Orders, OrderItems, Accounts, Sectors, Loans, WorkAssignments"
   },
   {
     "id": "new-01-hierarchy-descendants",
@@ -2499,5 +2499,744 @@
     "sql": null,
     "rows": null,
     "error": "\"window\" cannot be combined with aggregate, groupBy, having, or expand."
+  },
+  {
+    "id": "new-10-case-when-label",
+    "nl": "Orders labeled Large (over 2000) or Small",
+    "descriptor": {
+      "entity": "Orders",
+      "select": [
+        "ID",
+        "AMOUNT"
+      ],
+      "caseWhen": [
+        {
+          "as": "SIZE_LABEL",
+          "when": [
+            {
+              "where": [
+                {
+                  "col": "AMOUNT",
+                  "op": ">",
+                  "val": 2000
+                }
+              ],
+              "then": "Large"
+            }
+          ],
+          "else": "Small"
+        }
+      ]
+    },
+    "cqn": [
+      {
+        "SELECT": {
+          "from": {
+            "ref": [
+              "capdemo.Orders"
+            ]
+          },
+          "columns": [
+            {
+              "ref": [
+                "ID"
+              ]
+            },
+            {
+              "ref": [
+                "AMOUNT"
+              ]
+            },
+            {
+              "xpr": [
+                "case",
+                "when",
+                {
+                  "ref": [
+                    "AMOUNT"
+                  ]
+                },
+                ">",
+                {
+                  "val": 2000
+                },
+                "then",
+                {
+                  "val": "Large"
+                },
+                "else",
+                {
+                  "val": "Small"
+                },
+                "end"
+              ],
+              "as": "SIZE_LABEL"
+            }
+          ],
+          "limit": {
+            "rows": {
+              "val": 50
+            },
+            "offset": {
+              "val": 0
+            }
+          }
+        }
+      }
+    ],
+    "sql": [
+      "SELECT \"$O\".ID,\"$O\".AMOUNT,case when \"$O\".AMOUNT > ? then ? else ? end as SIZE_LABEL FROM capdemo_Orders as \"$O\" LIMIT ? OFFSET ?"
+    ],
+    "rows": [
+      {
+        "ID": "O1",
+        "AMOUNT": 1500,
+        "SIZE_LABEL": "Small"
+      },
+      {
+        "ID": "O2",
+        "AMOUNT": 2300.5,
+        "SIZE_LABEL": "Large"
+      },
+      {
+        "ID": "O3",
+        "AMOUNT": 800,
+        "SIZE_LABEL": "Small"
+      },
+      {
+        "ID": "O4",
+        "AMOUNT": 4200,
+        "SIZE_LABEL": "Large"
+      },
+      {
+        "ID": "O5",
+        "AMOUNT": 150,
+        "SIZE_LABEL": "Small"
+      },
+      {
+        "ID": "O6",
+        "AMOUNT": 99.99,
+        "SIZE_LABEL": "Small"
+      }
+    ],
+    "error": null
+  },
+  {
+    "id": "new-11-union-two-branches",
+    "nl": "Customers named Acme Corp, plus customers with an order over 4000",
+    "descriptor": {
+      "union": [
+        {
+          "entity": "Customers",
+          "select": [
+            "ID",
+            "NAME"
+          ],
+          "where": [
+            {
+              "col": "NAME",
+              "op": "=",
+              "val": "Acme Corp"
+            }
+          ]
+        },
+        {
+          "entity": "Customers",
+          "select": [
+            "ID",
+            "NAME"
+          ],
+          "where": [
+            {
+              "exists": "orders",
+              "where": [
+                {
+                  "col": "AMOUNT",
+                  "op": ">",
+                  "val": 4000
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    "cqn": [
+      {
+        "SELECT": {
+          "from": {
+            "ref": [
+              "capdemo.Customers"
+            ]
+          },
+          "columns": [
+            {
+              "ref": [
+                "ID"
+              ]
+            },
+            {
+              "ref": [
+                "NAME"
+              ]
+            }
+          ],
+          "where": [
+            {
+              "ref": [
+                "NAME"
+              ]
+            },
+            "=",
+            {
+              "val": "Acme Corp"
+            }
+          ],
+          "limit": {
+            "rows": {
+              "val": 50
+            },
+            "offset": {
+              "val": 0
+            }
+          }
+        }
+      },
+      {
+        "SELECT": {
+          "from": {
+            "ref": [
+              "capdemo.Customers"
+            ]
+          },
+          "columns": [
+            {
+              "ref": [
+                "ID"
+              ]
+            },
+            {
+              "ref": [
+                "NAME"
+              ]
+            }
+          ],
+          "where": [
+            {
+              "xpr": [
+                "exists",
+                {
+                  "ref": [
+                    {
+                      "id": "orders",
+                      "where": [
+                        {
+                          "ref": [
+                            "AMOUNT"
+                          ]
+                        },
+                        ">",
+                        {
+                          "val": 4000
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            }
+          ],
+          "limit": {
+            "rows": {
+              "val": 50
+            },
+            "offset": {
+              "val": 0
+            }
+          }
+        }
+      }
+    ],
+    "sql": [
+      "SELECT \"$C\".ID,\"$C\".NAME FROM capdemo_Customers as \"$C\" WHERE \"$C\".NAME = ? LIMIT ? OFFSET ?",
+      "SELECT \"$C\".ID,\"$C\".NAME FROM capdemo_Customers as \"$C\" WHERE (exists (SELECT 1 as \"1\" FROM capdemo_Orders as \"$o\" WHERE \"$o\".CUSTOMER_ID = \"$C\".ID and \"$o\".AMOUNT > ?)) LIMIT ? OFFSET ?"
+    ],
+    "rows": [
+      {
+        "ID": "C1",
+        "NAME": "Acme Corp"
+      },
+      {
+        "ID": "C2",
+        "NAME": "Globex Inc"
+      }
+    ],
+    "error": null
+  },
+  {
+    "id": "new-12-intersect-two-branches",
+    "nl": "Customers with an open order who also match the search term \"Globex\"",
+    "descriptor": {
+      "intersect": [
+        {
+          "entity": "Customers",
+          "select": [
+            "ID",
+            "NAME"
+          ],
+          "where": [
+            {
+              "exists": "orders",
+              "where": [
+                {
+                  "col": "STATUS",
+                  "op": "=",
+                  "val": "O"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "entity": "Customers",
+          "select": [
+            "ID",
+            "NAME"
+          ],
+          "search": "Globex"
+        }
+      ]
+    },
+    "cqn": [
+      {
+        "SELECT": {
+          "from": {
+            "ref": [
+              "capdemo.Customers"
+            ]
+          },
+          "columns": [
+            {
+              "ref": [
+                "ID"
+              ]
+            },
+            {
+              "ref": [
+                "NAME"
+              ]
+            }
+          ],
+          "where": [
+            {
+              "xpr": [
+                "exists",
+                {
+                  "ref": [
+                    {
+                      "id": "orders",
+                      "where": [
+                        {
+                          "ref": [
+                            "STATUS"
+                          ]
+                        },
+                        "=",
+                        {
+                          "val": "O"
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            }
+          ],
+          "limit": {
+            "rows": {
+              "val": 50
+            },
+            "offset": {
+              "val": 0
+            }
+          }
+        }
+      },
+      {
+        "SELECT": {
+          "from": {
+            "ref": [
+              "capdemo.Customers"
+            ]
+          },
+          "columns": [
+            {
+              "ref": [
+                "ID"
+              ]
+            },
+            {
+              "ref": [
+                "NAME"
+              ]
+            }
+          ],
+          "where": [
+            {
+              "xpr": [
+                {
+                  "func": "upper",
+                  "args": [
+                    {
+                      "ref": [
+                        "NAME"
+                      ]
+                    }
+                  ]
+                },
+                "like",
+                {
+                  "val": "%GLOBEX%"
+                },
+                "or",
+                {
+                  "func": "upper",
+                  "args": [
+                    {
+                      "ref": [
+                        "NOTES"
+                      ]
+                    }
+                  ]
+                },
+                "like",
+                {
+                  "val": "%GLOBEX%"
+                }
+              ]
+            }
+          ],
+          "limit": {
+            "rows": {
+              "val": 50
+            },
+            "offset": {
+              "val": 0
+            }
+          }
+        }
+      }
+    ],
+    "sql": [
+      "SELECT \"$C\".ID,\"$C\".NAME FROM capdemo_Customers as \"$C\" WHERE (exists (SELECT 1 as \"1\" FROM capdemo_Orders as \"$o\" WHERE \"$o\".CUSTOMER_ID = \"$C\".ID and \"$o\".STATUS = ?)) LIMIT ? OFFSET ?",
+      "SELECT \"$C\".ID,\"$C\".NAME FROM capdemo_Customers as \"$C\" WHERE (upper(\"$C\".NAME) like ? or upper(\"$C\".NOTES) like ?) LIMIT ? OFFSET ?"
+    ],
+    "rows": [
+      {
+        "ID": "C2",
+        "NAME": "Globex Inc"
+      }
+    ],
+    "error": null
+  },
+  {
+    "id": "new-13-except-two-branches",
+    "nl": "All customers except those who have never placed an order",
+    "descriptor": {
+      "except": [
+        {
+          "entity": "Customers",
+          "select": [
+            "ID",
+            "NAME"
+          ]
+        },
+        {
+          "entity": "Customers",
+          "select": [
+            "ID",
+            "NAME"
+          ],
+          "where": [
+            {
+              "notExists": "orders"
+            }
+          ]
+        }
+      ]
+    },
+    "cqn": [
+      {
+        "SELECT": {
+          "from": {
+            "ref": [
+              "capdemo.Customers"
+            ]
+          },
+          "columns": [
+            {
+              "ref": [
+                "ID"
+              ]
+            },
+            {
+              "ref": [
+                "NAME"
+              ]
+            }
+          ],
+          "limit": {
+            "rows": {
+              "val": 50
+            },
+            "offset": {
+              "val": 0
+            }
+          }
+        }
+      },
+      {
+        "SELECT": {
+          "from": {
+            "ref": [
+              "capdemo.Customers"
+            ]
+          },
+          "columns": [
+            {
+              "ref": [
+                "ID"
+              ]
+            },
+            {
+              "ref": [
+                "NAME"
+              ]
+            }
+          ],
+          "where": [
+            {
+              "xpr": [
+                "not",
+                "exists",
+                {
+                  "ref": [
+                    "orders"
+                  ]
+                }
+              ]
+            }
+          ],
+          "limit": {
+            "rows": {
+              "val": 50
+            },
+            "offset": {
+              "val": 0
+            }
+          }
+        }
+      }
+    ],
+    "sql": [
+      "SELECT \"$C\".ID,\"$C\".NAME FROM capdemo_Customers as \"$C\" LIMIT ? OFFSET ?",
+      "SELECT \"$C\".ID,\"$C\".NAME FROM capdemo_Customers as \"$C\" WHERE (not exists (SELECT 1 as \"1\" FROM capdemo_Orders as \"$o\" WHERE \"$o\".CUSTOMER_ID = \"$C\".ID)) LIMIT ? OFFSET ?"
+    ],
+    "rows": [
+      {
+        "ID": "C1",
+        "NAME": "Acme Corp"
+      },
+      {
+        "ID": "C2",
+        "NAME": "Globex Inc"
+      },
+      {
+        "ID": "C3",
+        "NAME": "Initech"
+      }
+    ],
+    "error": null
+  },
+  {
+    "id": "new-14-temporal-as-of-past",
+    "nl": "What was Alice's role on 2026-02-15?",
+    "descriptor": {
+      "entity": "WorkAssignments",
+      "select": [
+        "EMPLOYEE",
+        "ROLE"
+      ],
+      "where": [
+        {
+          "col": "EMPLOYEE",
+          "op": "=",
+          "val": "Alice"
+        }
+      ],
+      "asOf": "2026-02-15"
+    },
+    "cqn": [
+      {
+        "SELECT": {
+          "from": {
+            "ref": [
+              "capdemo.WorkAssignments"
+            ]
+          },
+          "columns": [
+            {
+              "ref": [
+                "EMPLOYEE"
+              ]
+            },
+            {
+              "ref": [
+                "ROLE"
+              ]
+            }
+          ],
+          "where": [
+            {
+              "ref": [
+                "EMPLOYEE"
+              ]
+            },
+            "=",
+            {
+              "val": "Alice"
+            },
+            "and",
+            {
+              "ref": [
+                "validFrom"
+              ]
+            },
+            "<=",
+            {
+              "val": "2026-02-15"
+            },
+            "and",
+            {
+              "ref": [
+                "validTo"
+              ]
+            },
+            ">",
+            {
+              "val": "2026-02-15"
+            }
+          ],
+          "limit": {
+            "rows": {
+              "val": 50
+            },
+            "offset": {
+              "val": 0
+            }
+          }
+        }
+      }
+    ],
+    "sql": [
+      "SELECT \"$W\".EMPLOYEE,\"$W\".ROLE FROM capdemo_WorkAssignments as \"$W\" WHERE \"$W\".EMPLOYEE = ? and \"$W\".validFrom <= ? and \"$W\".validTo > ? LIMIT ? OFFSET ?"
+    ],
+    "rows": [
+      {
+        "EMPLOYEE": "Alice",
+        "ROLE": "Analyst"
+      }
+    ],
+    "error": null
+  },
+  {
+    "id": "new-15-temporal-default-current",
+    "nl": "What is Alice's current role?",
+    "descriptor": {
+      "entity": "WorkAssignments",
+      "select": [
+        "EMPLOYEE",
+        "ROLE"
+      ],
+      "where": [
+        {
+          "col": "EMPLOYEE",
+          "op": "=",
+          "val": "Alice"
+        }
+      ]
+    },
+    "cqn": [
+      {
+        "SELECT": {
+          "from": {
+            "ref": [
+              "capdemo.WorkAssignments"
+            ]
+          },
+          "columns": [
+            {
+              "ref": [
+                "EMPLOYEE"
+              ]
+            },
+            {
+              "ref": [
+                "ROLE"
+              ]
+            }
+          ],
+          "where": [
+            {
+              "ref": [
+                "EMPLOYEE"
+              ]
+            },
+            "=",
+            {
+              "val": "Alice"
+            },
+            "and",
+            {
+              "ref": [
+                "validFrom"
+              ]
+            },
+            "<=",
+            {
+              "val": "2026-06-21T05:57:45.133Z"
+            },
+            "and",
+            {
+              "ref": [
+                "validTo"
+              ]
+            },
+            ">",
+            {
+              "val": "2026-06-21T05:57:45.133Z"
+            }
+          ],
+          "limit": {
+            "rows": {
+              "val": 50
+            },
+            "offset": {
+              "val": 0
+            }
+          }
+        }
+      }
+    ],
+    "sql": [
+      "SELECT \"$W\".EMPLOYEE,\"$W\".ROLE FROM capdemo_WorkAssignments as \"$W\" WHERE \"$W\".EMPLOYEE = ? and \"$W\".validFrom <= ? and \"$W\".validTo > ? LIMIT ? OFFSET ?"
+    ],
+    "rows": [
+      {
+        "EMPLOYEE": "Alice",
+        "ROLE": "Senior Analyst"
+      }
+    ],
+    "error": null
   }
 ]

@@ -234,4 +234,68 @@ module.exports = [
     },
     error: true,
   },
+  {
+    id: 'new-10-case-when-label',
+    nl: 'Orders labeled Large (over 2000) or Small',
+    descriptor: {
+      entity: 'Orders',
+      select: ['ID', 'AMOUNT'],
+      caseWhen: [{
+        as: 'SIZE_LABEL',
+        when: [
+          { where: [{ col: 'AMOUNT', op: '>', val: 2000 }], then: 'Large' },
+        ],
+        else: 'Small',
+      }],
+    },
+  },
+  {
+    id: 'new-11-union-two-branches',
+    nl: 'Customers named Acme Corp, plus customers with an order over 4000',
+    descriptor: {
+      union: [
+        { entity: 'Customers', select: ['ID', 'NAME'], where: [{ col: 'NAME', op: '=', val: 'Acme Corp' }] },
+        { entity: 'Customers', select: ['ID', 'NAME'], where: [{ exists: 'orders', where: [{ col: 'AMOUNT', op: '>', val: 4000 }] }] },
+      ],
+    },
+  },
+  {
+    id: 'new-12-intersect-two-branches',
+    nl: 'Customers with an open order who also match the search term "Globex"',
+    descriptor: {
+      intersect: [
+        { entity: 'Customers', select: ['ID', 'NAME'], where: [{ exists: 'orders', where: [{ col: 'STATUS', op: '=', val: 'O' }] }] },
+        { entity: 'Customers', select: ['ID', 'NAME'], search: 'Globex' },
+      ],
+    },
+  },
+  {
+    id: 'new-13-except-two-branches',
+    nl: 'All customers except those who have never placed an order',
+    descriptor: {
+      except: [
+        { entity: 'Customers', select: ['ID', 'NAME'] },
+        { entity: 'Customers', select: ['ID', 'NAME'], where: [{ notExists: 'orders' }] },
+      ],
+    },
+  },
+  {
+    id: 'new-14-temporal-as-of-past',
+    nl: "What was Alice's role on 2026-02-15?",
+    descriptor: {
+      entity: 'WorkAssignments',
+      select: ['EMPLOYEE', 'ROLE'],
+      where: [{ col: 'EMPLOYEE', op: '=', val: 'Alice' }],
+      asOf: '2026-02-15',
+    },
+  },
+  {
+    id: 'new-15-temporal-default-current',
+    nl: "What is Alice's current role?",
+    descriptor: {
+      entity: 'WorkAssignments',
+      select: ['EMPLOYEE', 'ROLE'],
+      where: [{ col: 'EMPLOYEE', op: '=', val: 'Alice' }],
+    },
+  },
 ];

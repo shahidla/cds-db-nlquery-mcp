@@ -20,7 +20,9 @@ database (via `@cap-js/sqlite`), not hand-written or recalled from memory. Re-ru
   (`Customers`), a calculated-on-read column (`Customers.FULL`), and
   `@Common.ValueList` (`Loans.SECTOR` → `Sectors.DESCRIPTION`). Also includes one
   `@cds.persistence.skip` entity (`InternalAudit`) to demonstrate it being excluded
-  from the queryable schema entirely.
+  from the queryable schema entirely, and one temporal entity
+  (`WorkAssignments`, via `@cds.valid.from`/`@cds.valid.to`) for `asOf`
+  time-travel queries.
 - `data/*.csv` — seed data for every entity (CAP's standard
   `<namespace>-<Entity>.csv` naming convention).
 - `queries.js` — the query list: for each entry, a natural-language question

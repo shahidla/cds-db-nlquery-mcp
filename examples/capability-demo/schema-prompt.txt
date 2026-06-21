@@ -15,3 +15,5 @@ Sectors [Sectors]
 Loans [Loans]
   columns: ID:String, DTI:Decimal[0..50], SECTOR:String{readable text available via "sector.DESCRIPTION" — include it in select to show the human-readable value, AND use this path (not the raw "SECTOR" column) when the question filters by a human term like "active"/"closed"/"overdue" rather than a raw code}
   joins:   "sector"→Sectors(SECTOR=CODE,INNER)
+WorkAssignments [WorkAssignments] [temporal: valid from validFrom to validTo]
+  columns: ID:String, EMPLOYEE:String, ROLE:String, validFrom:Date, validTo:Date

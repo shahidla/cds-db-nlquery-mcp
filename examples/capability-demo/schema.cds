@@ -55,6 +55,14 @@ entity Loans {
       sector : Association to Sectors on sector.CODE = SECTOR;
 }
 
+entity WorkAssignments {
+  key ID       : String(10);
+      EMPLOYEE : String(50);
+      ROLE     : String(50);
+      validFrom : Date @cds.valid.from;
+      validTo   : Date @cds.valid.to;
+}
+
 entity InternalAudit {
   key ID : String(10);
       NOTE : String(200);

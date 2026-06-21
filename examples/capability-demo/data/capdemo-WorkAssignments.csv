@@ -1,0 +1,3 @@
+ID,EMPLOYEE,ROLE,validFrom,validTo
+W1,Alice,Analyst,2026-01-01,2026-04-01
+W2,Alice,Senior Analyst,2026-04-01,2099-12-31
