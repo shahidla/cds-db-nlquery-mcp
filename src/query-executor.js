@@ -60,6 +60,68 @@ function buildAggregateCol({ fn, col, as }) {
   };
 }
 
+// CQN shape for a window function column, e.g. RANK() OVER (PARTITION BY ... ORDER BY ...) —
+// confirmed against cds.parse.expr('rank() over (partition by PARTNER order by AMOUNT desc)'):
+// { func: 'rank', args: [...], xpr: ['over', { xpr: [...partition/order tokens...] }] }.
+// Every identifier comes from resolveColSpec (the same validated path-resolution used
+// everywhere else), never the LLM's raw strings — partitionBy/orderBy entries can be
+// association paths (e.g. "customer.PARTNER") and go through the same join machinery.
+const WINDOW_NO_ARG_FNS = new Set(['row_number', 'rank', 'dense_rank']);
+const WINDOW_AGG_FNS    = new Set(['sum', 'avg', 'count', 'min', 'max']);
+
+function buildOverXpr(partitionBy, orderBy) {
+  const tokens = [];
+  if (partitionBy?.length) {
+    tokens.push('partition', 'by');
+    partitionBy.forEach((c, i) => {
+      if (i > 0) tokens.push(',');
+      tokens.push(resolveColSpec(c));
+    });
+  }
+  if (orderBy?.length) {
+    tokens.push('order', 'by');
+    orderBy.forEach((o, i) => {
+      if (i > 0) tokens.push(',');
+      tokens.push(resolveColSpec(o.col));
+      if (o.dir) tokens.push(o.dir.toLowerCase());
+    });
+  }
+  return ['over', { xpr: tokens }];
+}
+
+function buildWindowCol(spec) {
+  const { fn, as, col, offset, buckets, partitionBy, orderBy } = spec;
+  if (!as) throw new Error('"window" entries require an "as" alias.');
+
+  let args;
+  if (WINDOW_NO_ARG_FNS.has(fn)) {
+    args = [];
+  } else if (fn === 'ntile') {
+    if (!buckets) throw new Error('window fn "ntile" requires "buckets".');
+    args = [{ val: buckets }];
+  } else if (fn === 'lag' || fn === 'lead') {
+    if (!col) throw new Error(`window fn "${fn}" requires "col".`);
+    args = [resolveColSpec(col), { val: offset ?? 1 }];
+  } else if (WINDOW_AGG_FNS.has(fn)) {
+    if (!col) throw new Error(`window fn "${fn}" requires "col".`);
+    args = [col === '*' ? { val: 1 } : resolveColSpec(col)];
+  } else {
+    throw new Error(`Unsupported window function "${fn}".`);
+  }
+
+  return { func: fn, args, xpr: buildOverXpr(partitionBy, orderBy), as };
+}
+
+// Collects every column path referenced inside a "window" array's partitionBy/orderBy/col
+// entries — used to extend the entity-allowlist walk the same way every other section does.
+function collectWindowCols(windowList) {
+  return (windowList || []).flatMap(w => [
+    ...(w.col ? [w.col] : []),
+    ...(w.partitionBy || []),
+    ...(w.orderBy || []).map(o => o.col),
+  ]);
+}
+
 function isoDate(d) { return d.toISOString().split('T')[0]; }
 
 // Walks every path string (e.g. 'customer.dti.DTI_RATIO') and resolves every
@@ -433,6 +495,15 @@ async function executeHierarchy(hierarchy, entityDef, schema, select, allBlocked
  *               Mutually exclusive with where/aggregate/groupBy/having/search/expand/
  *               orderBy — only "select" and "limit" apply alongside it. maxDepth is
  *               capped server-side regardless of what's requested.
+ *   window    — [{ fn, as, col?, offset?, buckets?, partitionBy?, orderBy? }] — per-row
+ *               ranking/running-value columns (RANK/ROW_NUMBER/DENSE_RANK/NTILE/LAG/LEAD,
+ *               or SUM/AVG/COUNT/MIN/MAX used as a running aggregate) computed OVER a
+ *               partition — unlike "aggregate"+"groupBy", every row is kept. Cannot be
+ *               combined with aggregate/groupBy/having/expand.
+ *   windowFilter — [{ col, op, val }] — filters on a "window" column's alias (e.g. "top 3
+ *               per group"); a plain top-level "where" cannot reference a window-function
+ *               result (standard SQL evaluates WHERE before window functions), so this
+ *               wraps the query in a derived-table SELECT instead. Requires "window".
  *   orderBy   — column or 'assoc.COL'
  *   orderDir  — 'ASC' | 'DESC'
  *   limit     — rows requested (capped by server maxRows, enforced at SQL LIMIT)
@@ -454,6 +525,8 @@ async function executeDescriptor(descriptor, schema, callConfig = {}) {
     search,
     expand,
     hierarchy,
+    window: windowList,
+    windowFilter,
     orderBy, orderDir,
     limit: rawLimit = 50,
     offset: rawOffset = 0,
@@ -502,6 +575,26 @@ async function executeDescriptor(descriptor, schema, callConfig = {}) {
     throw new Error('viaFiltered is not supported in "groupBy" or "orderBy" — only in "select", "where", "aggregate", and "having".');
   }
 
+  // "window" keeps every row and attaches a per-row computed value — a different query
+  // shape than "aggregate"+"groupBy" (which collapses rows), so the two can't be mixed.
+  if (windowList?.length && (aggregate?.length || groupBy?.length || having?.length || expand?.length)) {
+    throw new Error('"window" cannot be combined with aggregate, groupBy, having, or expand.');
+  }
+  if (windowFilter?.length && !windowList?.length) {
+    throw new Error('"windowFilter" requires "window" to be present.');
+  }
+  if (windowFilter?.length) {
+    const windowAliases = new Set(windowList.map(w => w.as));
+    for (const cond of windowFilter) {
+      if (cond.any || cond.all || cond.exists || cond.notExists || cond.valCol) {
+        throw new Error('"windowFilter" only supports plain { col, op, val } conditions referencing a "window" alias.');
+      }
+      if (!windowAliases.has(cond.col)) {
+        throw new Error(`"windowFilter" column "${cond.col}" must reference a declared "window" alias.`);
+      }
+    }
+  }
+
   // Enforce the allowlist on entities reached via association-path joins too —
   // e.g. querying "BCA_DTI" but selecting "customer.BU_SORT1" reads BusinessPartners,
   // which must independently pass the same allowlist check as the top-level entity.
@@ -516,6 +609,7 @@ async function executeDescriptor(descriptor, schema, callConfig = {}) {
     ...(groupBy || []),
     ...(having || []).filter(h => h.col !== '*').map(h => specPath(h.col)),
     ...(orderBy ? [orderBy] : []),
+    ...collectWindowCols(windowList),
   ];
   const joinedEntities = collectJoinedEntities(allPaths, entityDef, schema);
   for (const e of collectExpandEntities(expand, entityDef, schema)) joinedEntities.add(e);
@@ -552,7 +646,7 @@ async function executeDescriptor(descriptor, schema, callConfig = {}) {
   // Path refs like { ref: ['customer', 'BU_SORT1'] } → CDS generates a SQL JOIN
 
   let cols = null;
-  if (select?.length || aggregate?.length || expand?.length) {
+  if (select?.length || aggregate?.length || expand?.length || windowList?.length) {
     // When "expand" is used without an explicit "select", default to all of the
     // parent entity's own columns (mirrors the no-select-no-expand "all columns"
     // behavior below) — q.columns() must be called explicitly once any nested
@@ -585,7 +679,8 @@ async function executeDescriptor(descriptor, schema, callConfig = {}) {
     const expandCols = expand?.length
       ? buildExpandCols(expand, entityDef, schema, allBlocked, serverCfg.maxExpandRows)
       : [];
-    cols = [...selectCols, ...aggregateCols, ...expandCols];
+    const windowCols = windowList?.length ? windowList.map(buildWindowCol) : [];
+    cols = [...selectCols, ...aggregateCols, ...expandCols, ...windowCols];
   } else if (allBlocked.size > 0) {
     // No explicit select ("all columns") but some columns are blocked. Without this,
     // the query would fall through to SELECT * — fetching blocked columns (e.g.
@@ -621,13 +716,24 @@ async function executeDescriptor(descriptor, schema, callConfig = {}) {
   const havingExpr = buildHavingExpr(having);
   if (havingExpr) q.having(havingExpr);
 
-  if (orderBy) {
-    q.orderBy([{ ...colRef(orderBy), sort: (orderDir || 'ASC').toLowerCase() }]);
+  // A window function's result alias can't be referenced in a WHERE clause at the
+  // same query level (standard SQL evaluates WHERE before window functions are
+  // computed) — "top 3 per group" needs a derived-table wrap instead. Confirmed
+  // SELECT.from(<built CQN SELECT>) works as a derived-table source against the
+  // installed cds.ql. orderBy/limit apply to the OUTER query once wrapped, since
+  // they're meant to control the final result, not the pre-filter row set.
+  let finalQ = q;
+  if (windowFilter?.length) {
+    finalQ = SELECT.from(q).where(buildWhereExpr(windowFilter));
   }
 
-  q.limit(effectiveLimit, effectiveOffset);   // single SQL LIMIT/OFFSET — HANA enforces it, not Node.js
+  if (orderBy) {
+    finalQ.orderBy([{ ...colRef(orderBy), sort: (orderDir || 'ASC').toLowerCase() }]);
+  }
 
-  let rows = await cds.run(q);
+  finalQ.limit(effectiveLimit, effectiveOffset);   // single SQL LIMIT/OFFSET — HANA enforces it, not Node.js
+
+  let rows = await cds.run(finalQ);
 
   // Translate enum raw values back to business terms (same mechanism Fiori uses for
   // coded value display) — e.g. STATUS: "C" also gets STATUS_text: "closed" alongside it.

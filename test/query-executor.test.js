@@ -748,3 +748,131 @@ test('hierarchy: rejects being combined with where/aggregate/expand/etc', async 
     /cannot be combined with/
   );
 });
+
+test('window: rank() over (partition by ... order by ...) builds the expected CQN column', async () => {
+  const capture = captureQuery();
+  try {
+    await executeDescriptor(
+      {
+        entity: 'Orders',
+        select: ['ID', 'AMOUNT'],
+        window: [{ fn: 'rank', as: 'amount_rank', partitionBy: ['customer.ID'], orderBy: [{ col: 'AMOUNT', dir: 'DESC' }] }],
+      },
+      schema, {}
+    );
+    const cols = capture.get().SELECT.columns;
+    const win = cols.find(c => c.as === 'amount_rank');
+    assert.deepEqual(win, {
+      func: 'rank',
+      args: [],
+      xpr: ['over', { xpr: [
+        'partition', 'by', { ref: ['customer', 'ID'] },
+        'order', 'by', { ref: ['AMOUNT'] }, 'desc',
+      ] }],
+      as: 'amount_rank',
+    });
+  } finally {
+    capture.restore();
+  }
+});
+
+test('window: sum() running total requires "col" and partitions/orders correctly', async () => {
+  const capture = captureQuery();
+  try {
+    await executeDescriptor(
+      {
+        entity: 'Orders',
+        select: ['ID'],
+        window: [{ fn: 'sum', col: 'AMOUNT', as: 'running_total', partitionBy: ['customer.ID'], orderBy: [{ col: 'ID', dir: 'ASC' }] }],
+      },
+      schema, {}
+    );
+    const win = capture.get().SELECT.columns.find(c => c.as === 'running_total');
+    assert.equal(win.func, 'sum');
+    assert.deepEqual(win.args, [{ ref: ['AMOUNT'] }]);
+  } finally {
+    capture.restore();
+  }
+});
+
+test('window: lag/lead require "col"; ntile requires "buckets"', async () => {
+  await assert.rejects(
+    () => executeDescriptor({ entity: 'Orders', select: ['ID'], window: [{ fn: 'lag', as: 'prev' }] }, schema, {}),
+    /window fn "lag" requires "col"/
+  );
+  await assert.rejects(
+    () => executeDescriptor({ entity: 'Orders', select: ['ID'], window: [{ fn: 'ntile', as: 'bucket' }] }, schema, {}),
+    /window fn "ntile" requires "buckets"/
+  );
+});
+
+test('window: rejects being combined with aggregate/groupBy/having/expand', async () => {
+  await assert.rejects(
+    () => executeDescriptor(
+      { entity: 'Orders', window: [{ fn: 'rank', as: 'r', orderBy: [{ col: 'ID' }] }], aggregate: [{ fn: 'count', col: 'ID', as: 'c' }] },
+      schema, {}
+    ),
+    /"window" cannot be combined with/
+  );
+});
+
+test('windowFilter wraps the query in a derived-table SELECT and filters on the alias', async () => {
+  const capture = captureQuery();
+  try {
+    await executeDescriptor(
+      {
+        entity: 'Orders',
+        select: ['ID', 'AMOUNT'],
+        window: [{ fn: 'rank', as: 'amount_rank', partitionBy: ['customer.ID'], orderBy: [{ col: 'AMOUNT', dir: 'DESC' }] }],
+        windowFilter: [{ col: 'amount_rank', op: '<=', val: 3 }],
+      },
+      schema, {}
+    );
+    const outer = capture.get().SELECT;
+    assert.ok(outer.from.SELECT, 'outer query must select FROM a derived-table SELECT');
+    assert.deepEqual(outer.where, [{ ref: ['amount_rank'] }, '<=', { val: 3 }]);
+  } finally {
+    capture.restore();
+  }
+});
+
+test('windowFilter requires "window" and a declared alias', async () => {
+  await assert.rejects(
+    () => executeDescriptor(
+      { entity: 'Orders', select: ['ID'], windowFilter: [{ col: 'amount_rank', op: '<=', val: 3 }] },
+      schema, {}
+    ),
+    /"windowFilter" requires "window"/
+  );
+  await assert.rejects(
+    () => executeDescriptor(
+      {
+        entity: 'Orders', select: ['ID'],
+        window: [{ fn: 'rank', as: 'amount_rank', orderBy: [{ col: 'ID' }] }],
+        windowFilter: [{ col: 'not_declared', op: '<=', val: 3 }],
+      },
+      schema, {}
+    ),
+    /must reference a declared "window" alias/
+  );
+});
+
+test('orderBy applies to the outer query when windowFilter wraps the SELECT', async () => {
+  const capture = captureQuery();
+  try {
+    await executeDescriptor(
+      {
+        entity: 'Orders',
+        select: ['ID', 'AMOUNT'],
+        window: [{ fn: 'rank', as: 'amount_rank', partitionBy: ['customer.ID'], orderBy: [{ col: 'AMOUNT', dir: 'DESC' }] }],
+        windowFilter: [{ col: 'amount_rank', op: '<=', val: 3 }],
+        orderBy: 'amount_rank', orderDir: 'ASC',
+      },
+      schema, {}
+    );
+    const outer = capture.get().SELECT;
+    assert.deepEqual(outer.orderBy, [{ ref: ['amount_rank'], sort: 'asc' }]);
+  } finally {
+    capture.restore();
+  }
+});

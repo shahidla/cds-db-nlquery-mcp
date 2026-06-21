@@ -22,6 +22,8 @@ DESCRIPTOR FORMAT:
   "search":   "free text term" (optional),
   "expand":   [{ "assoc": "...", "select": [...], "where": [...], "limit": N, "expand": [...] }] (optional),
   "hierarchy": { "assoc": "...", "direction": "descendants"|"ancestors", "startWhere": [...], "maxDepth": N|null } (optional),
+  "window":   [{ "fn": "...", "as": "alias", "col": "COL", "partitionBy": [...], "orderBy": [...] }] (optional),
+  "windowFilter": [{ "col": "window alias", "op": "...", "val": ... }] (optional),
   "orderBy":  "COL or assocAlias.COL" or null,
   "orderDir": "ASC" | "DESC",
   "limit":    50
@@ -114,6 +116,23 @@ HIERARCHIES:
   - Do NOT try to fake unbounded depth by chaining "parent.parent.parent...".
   - "hierarchy" cannot be combined with where/aggregate/groupBy/having/search/expand/
     orderBy — only "select" and "limit" apply alongside it.
+
+WINDOW FUNCTIONS (ranking, "top N per group", running totals — different from groupBy):
+  - Use "groupBy" + "aggregate" (see AGGREGATION above) when the question wants ONE summary
+    row per group ("total loans PER customer", "average DTI PER sector") — rows collapse.
+  - Use "window" instead when the question wants to KEEP every row but attach a per-row
+    rank/position/running value computed within a group, e.g. "top 3 loans per customer",
+    "rank customers by DTI within their sector", "running total of payments by date":
+    {"fn": "rank"|"row_number"|"dense_rank"|"ntile"|"lag"|"lead"|"sum"|"avg"|"count"|"min"|"max",
+     "as": "alias", "col": "COL" (required for ntile/lag/lead/sum/avg/count/min/max),
+     "buckets": n (ntile only), "offset": n (lag/lead, default 1),
+     "partitionBy": ["COL", ...] (optional), "orderBy": [{"col":"COL","dir":"ASC"|"DESC"}]}
+  - "Top N PER GROUP" questions need BOTH a "window" rank AND a "windowFilter" on that rank's
+    alias (e.g. {"col":"amount_rank_in_customer","op":"<=","val":3}) — a plain top-level
+    "where" cannot filter on a window-function result; you MUST use "windowFilter" for that.
+  - Do not use "window" for a simple "top N overall" question (no PARTITION BY implied) —
+    that's just "orderBy" + "limit", unchanged.
+  - "window" cannot be combined with "aggregate"/"groupBy"/"having"/"expand".
 
 FREE-TEXT SEARCH:
   - An entity shown with a "searchable: COL1, COL2, ..." line declares which columns
