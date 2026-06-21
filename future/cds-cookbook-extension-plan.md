@@ -1355,6 +1355,142 @@ path as `MCP_BLOCKED_COLUMNS`/`allowedEntities` enforcement.
 
 ---
 
+## 20. Semantic enablement — standard annotations first, `@NLP.*` only where CDS has no equivalent
+
+### Why this section exists
+§1–§19 are all about *query-generation capability* — given the right entity/column names, can
+the descriptor→CQN pipeline express what the question asks for. That's necessary but not
+sufficient: before the LLM can build a correct descriptor at all, it has to correctly map the
+words in the question onto the right entity and column in the first place. A schema where
+`AMOUNT` exists on `Loans` (outstanding principal), `Payments` (amount paid), and `Collateral`
+(appraised value) gives the query engine no trouble — but gives the *planner* a real
+disambiguation problem if all it sees is three bare column names called `AMOUNT`. This section
+is about the schema metadata that helps the planner get the mapping right, separate from
+whether the executor can express the resulting query. **Confirms the operating principle this
+package already follows for one annotation (`@NLP.label` falling back from the standard
+`@title`): prefer the standard CDS/OData annotation wherever one exists, since most CAP
+projects already carry these for their own Fiori UI — fall back to a custom `@NLP.*`
+annotation only for the handful of things standard CDS genuinely has no annotation for at
+all.** That principle, confirmed against the standard-annotations reference, generalizes
+cleanly to two more cases below.
+
+### CDS/CQL background — what standard CDS already gives you
+Confirmed directly from CAP's own "Common Annotations" reference:
+- **`@title`** — human-readable name (already read by this package, `schema-reader.js:105`).
+  `@Common.Label` is the OData-vocabulary equivalent of the same concept; not needed
+  separately since `@title` is the protocol-agnostic CDL form most schemas will actually use.
+- **`@description`** — a free-text explanation, protocol-agnostic, distinct from `@title`.
+  `@Core.Description` is its OData-vocabulary equivalent. **Not currently read anywhere in
+  this package** — this is the concrete gap worth closing first, since a description carries
+  far more disambiguating signal than a label alone (a label might just be "Amount"; a
+  description can say "Outstanding principal balance owed by the borrower, in `CURRENCY`").
+- Doc comments (`// ...` or `/** ... */` directly above a definition) are reported to be
+  translated into `@Core.Description` **when generating OData EDM(X)** — this wording implies
+  the transformation may happen at OData-service-export time, not necessarily present as a
+  literal `@description`/`@Core.Description` property on the plain `cds.linked()` CSN this
+  package reads directly off the db layer. **Treat this as unverified** — check empirically
+  (load a `.cds` file with a doc comment, run `cds.linked()`, inspect whether the comment
+  shows up as an annotation at all) before depending on doc comments as a metadata source;
+  if it isn't present on the linked db-layer model, the explicit `@description` annotation is
+  the reliable one to rely on, not the comment shorthand.
+- **What standard CDS does *not* have**: an annotation for "this column/entity is also known
+  as X, Y, Z" (synonyms/aliases a business user might say instead of the schema's own name —
+  "DTI" for "debt-to-income ratio", "past due" for `DAYS_OVERDUE`). This is the one case where
+  reaching for a custom `@NLP.*` annotation is justified, the same way `@NLP.joinType`/
+  `@NLP.alias` are justified today for join-shaping concepts CDS has no standard hook for.
+
+### Current state
+`schema-reader.js:105` (column) and `:137` (entity) read `@NLP.label || @title`. Nothing reads
+`@description`/`@Core.Description`. There is no synonym/alias mechanism at all. The schema
+prompt (`buildSchemaPrompt`) renders only a type, a label, and (where applicable) join/enum/
+text-lookup info — no descriptive sentence, no alternate names. For a schema with several
+similarly-named columns across entities, or business jargon that doesn't match the column name
+at all, the planner currently has only the column/label name itself to go on.
+
+### Extension
+
+**1. `src/schema-reader.js` changes** — read `@description` (falling back to `@Core.Description`
+for schemas authored against the OData vocabulary directly rather than the CDL shortcut),
+at both column and entity level, same pattern as the existing label resolution:
+```js
+const meta = {
+  type:  mapType(col.type),
+  label: col['@NLP.label'] || col['@title'] || null,
+  description: col['@description'] || col['@Core.Description'] || null,
+};
+```
+```js
+// entity level, alongside the existing label line (schema-reader.js:137)
+description: def['@description'] || def['@Core.Description'] || null,
+```
+Render in the schema prompt only when present — descriptions add real prompt-token cost, so
+don't pad every column with a `null`-suppressing placeholder:
+```
+AMOUNT:Decimal ["Outstanding Amount"] — Outstanding principal balance owed by the borrower
+```
+Second, for synonyms — read a new custom `@NLP.synonyms` annotation (a string array), since
+this is the genuine standard-CDS gap identified above:
+```cds
+DAYS_OVERDUE : Integer @NLP.synonyms: ['past due', 'days late', 'delinquent days'];
+```
+```js
+if (col['@NLP.synonyms']?.length) meta.synonyms = col['@NLP.synonyms'];
+```
+Render as `DAYS_OVERDUE:Integer (aka: past due, days late, delinquent days)`.
+
+**2. No `query-executor.js` change** — this is purely planner-input enrichment; nothing here
+changes what's executable, only how reliably the planner picks the right columns.
+
+**3. `src/llm-planner.js` prompt changes** — one rule, since the schema text itself now
+carries the extra signal:
+```
+SCHEMA DESCRIPTIONS AND SYNONYMS:
+  - Where a column/entity has a description (free text after "—"), use it to disambiguate
+    between same-named or similarly-named columns across different entities — e.g. two
+    different AMOUNT columns on different entities are NOT interchangeable just because they
+    share a name; read their descriptions to pick the one the question actually means.
+  - Where a column lists "(aka: ...)" synonyms, match the question's wording against those
+    synonyms, not just the literal column/label name — business users describe data with
+    their own vocabulary, which doesn't always match the schema's naming.
+```
+
+**4. Schema-authoring guidance worth adding to the README, not just this internal plan** —
+once implemented, the practical advice for someone modeling a new CAP project specifically to
+be used with this package: **add `@description` to any column whose name is ambiguous out of
+context, and reserve `@NLP.synonyms` for genuine business-jargon mismatches** (don't use it as
+a substitute for a clear column name or a missing `@title`) — the standard annotations should
+carry the majority of the disambiguation load, with `@NLP.*` reserved for the residual cases
+CDS itself has no vocabulary for.
+
+### Worked example
+Schema fragment:
+```cds
+entity Loans {
+  AMOUNT : Decimal @title: 'Loan Amount' @description: 'Original principal amount disbursed to the borrower';
+}
+entity Collateral {
+  AMOUNT : Decimal @title: 'Collateral Value' @description: 'Current appraised market value of the pledged asset';
+  loan   : Association to Loans;
+}
+```
+Question: *"Which loans have collateral worth less than half the loan amount?"* — with
+descriptions present, the planner has a much stronger signal to pick `Collateral.AMOUNT` for
+"collateral worth" and `Loans.AMOUNT` (via `loan.AMOUNT` or as the entity root) for "the loan
+amount," rather than risking a same-named-column mix-up:
+```json
+{
+  "entity": "Collateral",
+  "select": ["loan.LOAN_ID", "AMOUNT", "loan.AMOUNT"],
+  "where": [{ "col": "AMOUNT", "op": "<", "valCol": "loan.AMOUNT" }],
+  "limit": 50
+}
+```
+("less than half" would need a computed expression on top of this — not the point of the
+example; the point is that `Collateral.AMOUNT` and `loan.AMOUNT` were picked correctly instead
+of mixed up, which descriptions are what make reliable.)
+
+---
+
 ## Known limitations vs. full hand-written SQL — what stays out of scope, and why
 
 The question this section answers: *"If I gave this database to someone who knows SQL well,
@@ -1373,9 +1509,11 @@ extension in this document, and the architectural reason it's drawn there. (Two 
 from earlier drafts of this table, kept here for transparency: `UNION`/`INTERSECT`/`EXCEPT`
 were originally listed here as architecturally hard — wrong, see §16, they're pure JS array
 operations over the existing validated path. `CASE WHEN` was originally listed here as a vague
-"not yet planned gap" — also an underestimate; confirmed as plain native CQL, see §17.)
+"not yet planned gap" — also an underestimate; confirmed as plain native CQL, see §17. §20 is
+not a capability extension at all — it's schema-metadata enablement that improves how
+reliably the planner picks the right entity/column, orthogonal to this table.)
 
-| Capability | Status after §1–§19 | Why it's still out of scope |
+| Capability | Status after §1–§20 | Why it's still out of scope |
 |---|---|---|
 | `WITH ... AS (...)` CTEs (general-purpose) | Not supported, except the one narrow raw-SQL CTE used internally for SQLite recursive hierarchy traversal (§4, fallback path only) | A general CTE feature means accepting arbitrary multi-step query structure from the LLM — at that point you're no longer validating a finite, known vocabulary, you're validating arbitrary SQL structure, which is a different and much harder security problem. |
 | Arbitrary correlated scalar subquery as a `SELECT` column (e.g. `(SELECT MAX(x) FROM y WHERE ...) AS col`) | Not supported as a generic feature | Only specific, validated subquery *shapes* are supported: `exists`/`notExists` (§3), the window-function derived-table wrap (§15), and `caseWhen` (§17). A generic "put any subquery anywhere" escape hatch reopens the same arbitrary-structure problem as CTEs. |
@@ -1409,7 +1547,7 @@ purpose, because that's what makes the following three guarantees possible at al
    weaker than "the capability doesn't exist in the vocabulary at all."
 
 **If full arbitrary-SQL parity is genuinely required** — i.e., a use case that truly cannot
-be expressed by any combination of §1–§19 (CTEs, pivots, full outer joins, procedure calls) —
+be expressed by any combination of §1–§20 (CTEs, pivots, full outer joins, procedure calls) —
 that is a different and strictly higher-risk product, not an extension of this one. It should
 be a separate, explicitly opt-in mode: a distinct tool name (e.g. `raw_sql_query`, never the
 same tool as `natural_language_query`), gated behind its own config flag (e.g.
@@ -1417,7 +1555,7 @@ same tool as `natural_language_query`), gated behind its own config flag (e.g.
 single-`SELECT`-statement validator that rejects multiple statements, DDL/DML keywords, and
 comment-hiding tricks; mandatory use of the restricted read-only `MCP_DB_USER` (never the
 app's default connection); and ideally execution inside an explicitly read-only transaction if
-the driver supports one. **Recommendation: implement §1–§19 first** — they cover the
+the driver supports one. **Recommendation: implement §1–§20 first** — they cover the
 overwhelming majority of real question shapes, including ranking, partitioning, multi-entity
 combination, computed labels, and time-travel — and only consider a raw-SQL mode if a specific,
 concrete question genuinely cannot be expressed any other way.
@@ -1428,6 +1566,12 @@ concrete question genuinely cannot be expressed any other way.
 
 Ordered by (impact) ÷ (implementation risk), not strict dependency:
 
+0. **§20** Semantic enablement (`@description`/`@NLP.synonyms`) — listed ahead of §1 on
+   purpose, not numbered with the rest: it's metadata enrichment, not query capability, has no
+   executor risk at all, and improves the accuracy of *every other* section's worked examples
+   in practice (a planner that can't disambiguate `AMOUNT` correctly won't benefit from
+   aggregation/window-function capability built on top of a wrong column pick). Do this early,
+   probably even before §13.
 1. **§13** `@cds.persistence.skip` filter — tiny, pure bugfix, do first regardless of what
    else gets picked up.
 2. **§2** OR/nested WHERE groups — small, high-value, no new architectural concept (just a
