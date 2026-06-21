@@ -64,6 +64,32 @@ test('associations become joins with correct cardinality-based type', () => {
   assert.equal(schema.Orders.joins.customer.type, 'INNER');
 });
 
+test('to-many compositions are flagged with toMany:true on the join', () => {
+  const csn = linkedModel({
+    'app.Orders': {
+      kind: 'entity',
+      elements: {
+        ID: { type: 'cds.String', key: true },
+        items: {
+          type: 'cds.Composition',
+          isComposition: true,
+          target: 'app.Items',
+          cardinality: { max: '*' },
+          on: [{ ref: ['items', 'ORDER_ID'] }, '=', { ref: ['ID'] }],
+        },
+      },
+    },
+    'app.Items': {
+      kind: 'entity',
+      elements: { ID: { type: 'cds.String', key: true }, ORDER_ID: { type: 'cds.String' } },
+    },
+  });
+  const schema = buildSchema(csn);
+  assert.equal(schema.Orders.joins.items.toMany, true);
+  const prompt = buildSchemaPrompt(schema);
+  assert.match(prompt, /"items"→Items\([^)]*,toMany\)/);
+});
+
 test('native CDS enum is captured as value -> symbolic name', () => {
   const csn = linkedModel({
     'app.Loans': {

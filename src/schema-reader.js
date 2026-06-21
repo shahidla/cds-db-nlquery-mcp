@@ -100,7 +100,7 @@ function buildSchema(cdsModel) {
         const joinType = col['@NLP.joinType'] || (toMany ? 'LEFT' : 'INNER');
         const alias    = col['@NLP.alias']    || colName;
 
-        joins[alias] = { entity: targetKey, from: keys.from, to: keys.to, type: joinType };
+        joins[alias] = { entity: targetKey, from: keys.from, to: keys.to, type: joinType, toMany };
 
       } else if (col.type && col.virtual) {
         // Virtual elements are never persisted — populated by custom handler code at
@@ -258,7 +258,7 @@ function buildSchemaPrompt(schema) {
       })
       .join(', ');
     const joins = Object.entries(def.joins || {})
-      .map(([alias, j]) => `"${alias}"→${j.entity}(${j.from}=${j.to},${j.type})`)
+      .map(([alias, j]) => `"${alias}"→${j.entity}(${j.from}=${j.to},${j.type}${j.toMany ? ',toMany' : ''})`)
       .join(', ');
     lines.push(`${name} [${def.label}]${def.description ? ` — ${def.description}` : ''}`);
     lines.push(`  columns: ${cols}`);

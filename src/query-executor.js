@@ -207,6 +207,72 @@ function buildSearchExpr(term, searchableColumns) {
   return [{ xpr: tokens }];
 }
 
+// Recursively collects every entity reached via an "expand" tree — used to extend
+// the entity allowlist check the same way collectJoinedEntities does for flat paths.
+function collectExpandEntities(expandList, parentEntityDef, schema) {
+  const entities = new Set();
+  for (const node of expandList || []) {
+    const join = parentEntityDef?.joins?.[node.assoc];
+    if (!join) continue; // unresolvable alias — query will fail later anyway
+    entities.add(join.entity);
+    if (node.expand?.length) {
+      for (const e of collectExpandEntities(node.expand, schema[join.entity], schema)) entities.add(e);
+    }
+  }
+  return entities;
+}
+
+// CAP/CQL does not support nested expands where BOTH the parent and the child
+// association are to-many (e.g. Orders.items{to-many}.parts{to-many}) — only
+// to-many → to-one nesting is supported (e.g. Orders.items{to-many}.product{to-one}).
+// Confirmed against CAP's own CQL docs; reject up front with a clear error instead
+// of sending a query CAP would reject at a less obvious point.
+function validateExpandNesting(expandList, parentEntityDef, schema, ancestorToMany) {
+  for (const node of expandList || []) {
+    const join = parentEntityDef?.joins?.[node.assoc];
+    if (!join) {
+      throw new Error(`Unknown association "${node.assoc}" for expand — not found on "${parentEntityDef?.fqn}"`);
+    }
+    if (ancestorToMany && join.toMany) {
+      throw new Error(
+        `expand "${node.assoc}" is nested under another to-many expand — CAP/CQL does not support ` +
+        `nested expands where both the parent and child association are to-many. Flatten one level ` +
+        `(e.g. select a to-one scalar instead, or split into two separate queries).`
+      );
+    }
+    if (node.expand?.length) {
+      validateExpandNesting(node.expand, schema[join.entity], schema, join.toMany);
+    }
+  }
+}
+
+// Builds the CQN { ref, expand, where?, limit } column nodes for a descriptor's
+// "expand" entries, recursing into nested expand levels. Each level's plain "select"
+// columns and nested expand columns are combined into a single flat "expand" array —
+// confirmed against cds.ql's own builder output for o.items(i => { i.product; i.qty }).
+function buildExpandCols(expandList, parentEntityDef, schema, allBlocked, maxExpandRows) {
+  return (expandList || []).map(node => {
+    const join = parentEntityDef.joins[node.assoc];
+    const targetDef = schema[join.entity];
+
+    const filteredSelect = (node.select?.length ? node.select : Object.keys(targetDef.columns))
+      .filter(c => !allBlocked.has(c.split('.').pop()));
+    const subCols     = filteredSelect.map(colRef);
+    const nestedCols   = node.expand?.length
+      ? buildExpandCols(node.expand, targetDef, schema, allBlocked, maxExpandRows)
+      : [];
+
+    const expandCol = { ref: [node.assoc], expand: [...subCols, ...nestedCols] };
+
+    const whereExpr = buildWhereExpr(node.where, targetDef, schema);
+    if (whereExpr) expandCol.where = whereExpr;
+
+    expandCol.limit = { rows: { val: Math.min(node.limit || maxExpandRows, maxExpandRows) } };
+
+    return expandCol;
+  });
+}
+
 /**
  * Execute a query descriptor against the CDS db layer.
  *
@@ -224,6 +290,10 @@ function buildSearchExpr(term, searchableColumns) {
  *   having    — [{ fn, col, op, val }] — filters on an aggregate value (e.g. count(LOAN_ID) > 5)
  *   search    — free-text term matched against the entity's @cds.search columns (AND-ed
  *               with any other where conditions); errors if the entity declares none
+ *   expand    — [{ assoc, select, where, limit, expand }] — nests a to-many association/
+ *               composition's rows instead of flattening them (one parent object with a
+ *               nested array, via CAP's native expand). Can nest, but not two to-many
+ *               levels deep (CQL limitation, validated up front).
  *   orderBy   — column or 'assoc.COL'
  *   orderDir  — 'ASC' | 'DESC'
  *   limit     — rows requested (capped by server maxRows, enforced at SQL LIMIT)
@@ -243,6 +313,7 @@ async function executeDescriptor(descriptor, schema, callConfig = {}) {
     groupBy,
     having,
     search,
+    expand,
     orderBy, orderDir,
     limit: rawLimit = 50,
     offset: rawOffset = 0,
@@ -271,6 +342,8 @@ async function executeDescriptor(descriptor, schema, callConfig = {}) {
     throw new Error(`Unknown entity "${entity}". Known: ${Object.keys(schema).join(', ')}`);
   }
 
+  if (expand?.length) validateExpandNesting(expand, entityDef, schema, false);
+
   // Enforce the allowlist on entities reached via association-path joins too —
   // e.g. querying "BCA_DTI" but selecting "customer.BU_SORT1" reads BusinessPartners,
   // which must independently pass the same allowlist check as the top-level entity.
@@ -287,6 +360,7 @@ async function executeDescriptor(descriptor, schema, callConfig = {}) {
     ...(orderBy ? [orderBy] : []),
   ];
   const joinedEntities = collectJoinedEntities(allPaths, entityDef, schema);
+  for (const e of collectExpandEntities(expand, entityDef, schema)) joinedEntities.add(e);
   for (const joined of joinedEntities) {
     if (serverAllowed.length > 0 && !serverAllowed.includes(joined)) {
       throw new Error(
@@ -320,8 +394,13 @@ async function executeDescriptor(descriptor, schema, callConfig = {}) {
   // Path refs like { ref: ['customer', 'BU_SORT1'] } → CDS generates a SQL JOIN
 
   let cols = null;
-  if (select?.length || aggregate?.length) {
-    const filteredSelect = (select || []).filter(c => !allBlocked.has(c.split('.').pop()));
+  if (select?.length || aggregate?.length || expand?.length) {
+    // When "expand" is used without an explicit "select", default to all of the
+    // parent entity's own columns (mirrors the no-select-no-expand "all columns"
+    // behavior below) — q.columns() must be called explicitly once any nested
+    // expand column is added, so there's no implicit "SELECT *" fallback here.
+    const effectiveSelect = select?.length ? select : (aggregate?.length ? [] : Object.keys(entityDef.columns));
+    const filteredSelect = effectiveSelect.filter(c => !allBlocked.has(c.split('.').pop()));
     const filteredAggregate = (aggregate || []).filter(a => a.col === '*' || !allBlocked.has(a.col.split('.').pop()));
 
     // The LLM is told (rule 7) never to select the same leaf column name twice
@@ -344,7 +423,10 @@ async function executeDescriptor(descriptor, schema, callConfig = {}) {
       return colRef(c);
     });
     const aggregateCols = filteredAggregate.map(buildAggregateCol);
-    cols = [...selectCols, ...aggregateCols];
+    const expandCols = expand?.length
+      ? buildExpandCols(expand, entityDef, schema, allBlocked, serverCfg.maxExpandRows)
+      : [];
+    cols = [...selectCols, ...aggregateCols, ...expandCols];
   } else if (allBlocked.size > 0) {
     // No explicit select ("all columns") but some columns are blocked. Without this,
     // the query would fall through to SELECT * — fetching blocked columns (e.g.

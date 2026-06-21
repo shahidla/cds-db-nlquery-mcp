@@ -9,11 +9,32 @@ const schema = {
   Orders: {
     key: 'ID', fqn: 'app.Orders',
     columns: { ID: { type: 'String' }, AMOUNT: { type: 'Decimal' }, SECRET: { type: 'String' } },
-    joins: { customer: { entity: 'Customers', from: 'CUSTOMER', to: 'ID', type: 'INNER' } },
+    joins: {
+      customer: { entity: 'Customers', from: 'CUSTOMER', to: 'ID', type: 'INNER' },
+      items:    { entity: 'Items', from: 'ID', to: 'ORDER_ID', type: 'LEFT', toMany: true },
+    },
     searchableColumns: ['ID'],
   },
   Customers: {
     key: 'ID', fqn: 'app.Customers',
+    columns: { ID: { type: 'String' }, NAME: { type: 'String' } },
+    joins: {},
+  },
+  Items: {
+    key: 'ID', fqn: 'app.Items',
+    columns: { ID: { type: 'String' }, PRODUCT: { type: 'String' }, QTY: { type: 'Integer' }, SECRET: { type: 'String' } },
+    joins: {
+      productRef: { entity: 'Products', from: 'PRODUCT', to: 'ID', type: 'INNER', toMany: false },
+      parts:      { entity: 'Parts', from: 'ID', to: 'ITEM_ID', type: 'LEFT', toMany: true },
+    },
+  },
+  Products: {
+    key: 'ID', fqn: 'app.Products',
+    columns: { ID: { type: 'String' }, NAME: { type: 'String' } },
+    joins: {},
+  },
+  Parts: {
+    key: 'ID', fqn: 'app.Parts',
     columns: { ID: { type: 'String' }, NAME: { type: 'String' } },
     joins: {},
   },
@@ -336,5 +357,118 @@ test('search on an entity with no searchableColumns throws a clear error', async
   await assert.rejects(
     () => executeDescriptor({ entity: 'Customers', search: 'abc' }, schema, {}),
     /has no @cds\.search columns declared/
+  );
+});
+
+test('expand produces a nested { ref, expand } CQN column', async () => {
+  const capture = captureQuery();
+  try {
+    await executeDescriptor(
+      { entity: 'Orders', select: ['ID'], expand: [{ assoc: 'items', select: ['PRODUCT', 'QTY'] }] },
+      schema, {}
+    );
+    const cols = capture.get().SELECT.columns;
+    const expandCol = cols.find(c => c.ref?.[0] === 'items');
+    assert.ok(expandCol, 'expand column must be present');
+    assert.deepEqual(expandCol.expand.map(c => c.ref[0]), ['PRODUCT', 'QTY']);
+    assert.ok(expandCol.limit.rows.val > 0, 'expand level must have a default row cap');
+  } finally {
+    capture.restore();
+  }
+});
+
+test('expand defaults to all parent columns when no top-level select is given', async () => {
+  const capture = captureQuery();
+  try {
+    await executeDescriptor({ entity: 'Orders', expand: [{ assoc: 'items', select: ['PRODUCT'] }] }, schema, {});
+    const cols = capture.get().SELECT.columns;
+    assert.ok(cols.some(c => c.ref?.[0] === 'ID'), 'plain parent columns must still be selected');
+    assert.ok(cols.some(c => c.ref?.[0] === 'AMOUNT'));
+  } finally {
+    capture.restore();
+  }
+});
+
+test('expand strips blocked columns from the nested select', async () => {
+  const capture = captureQuery();
+  try {
+    await executeDescriptor(
+      { entity: 'Orders', select: ['ID'], expand: [{ assoc: 'items', select: ['PRODUCT', 'SECRET'] }] },
+      schema, { blockedColumns: ['SECRET'] }
+    );
+    const expandCol = capture.get().SELECT.columns.find(c => c.ref?.[0] === 'items');
+    assert.ok(!expandCol.expand.some(c => c.ref[0] === 'SECRET'), 'blocked column must not appear inside expand');
+  } finally {
+    capture.restore();
+  }
+});
+
+test('expand row cap is bounded by server maxExpandRows', async () => {
+  const capture = captureQuery();
+  const config = require('../src/config');
+  const original = config.maxExpandRows;
+  config.maxExpandRows = 3;
+  try {
+    await executeDescriptor(
+      { entity: 'Orders', select: ['ID'], expand: [{ assoc: 'items', select: ['PRODUCT'], limit: 999 }] },
+      schema, {}
+    );
+    const expandCol = capture.get().SELECT.columns.find(c => c.ref?.[0] === 'items');
+    assert.equal(expandCol.limit.rows.val, 3);
+  } finally {
+    config.maxExpandRows = original;
+    capture.restore();
+  }
+});
+
+test('nested expand is allowed when the nested association is to-one', async () => {
+  const capture = captureQuery();
+  try {
+    await executeDescriptor(
+      {
+        entity: 'Orders', select: ['ID'],
+        expand: [{ assoc: 'items', select: ['PRODUCT'], expand: [{ assoc: 'productRef', select: ['NAME'] }] }],
+      },
+      schema, {}
+    );
+    const itemsCol = capture.get().SELECT.columns.find(c => c.ref?.[0] === 'items');
+    const nested = itemsCol.expand.find(c => c.ref?.[0] === 'productRef');
+    assert.ok(nested, 'to-many → to-one nested expand must be allowed');
+  } finally {
+    capture.restore();
+  }
+});
+
+test('nested expand is rejected when both levels are to-many', async () => {
+  await assert.rejects(
+    () => executeDescriptor(
+      {
+        entity: 'Orders', select: ['ID'],
+        expand: [{ assoc: 'items', select: ['PRODUCT'], expand: [{ assoc: 'parts', select: ['NAME'] }] }],
+      },
+      schema, {}
+    ),
+    /both the parent and child association are to-many/
+  );
+});
+
+test('expand target entity is enforced by the allowlist', async () => {
+  await assert.rejects(
+    () => executeDescriptor(
+      { entity: 'Orders', select: ['ID'], expand: [{ assoc: 'items', select: ['PRODUCT'] }] },
+      schema,
+      { allowedEntities: ['Orders'] } // Items deliberately excluded
+    ),
+    /reached via association join/
+  );
+});
+
+test('expand on an unknown association throws a clear error', async () => {
+  await assert.rejects(
+    () => executeDescriptor(
+      { entity: 'Orders', select: ['ID'], expand: [{ assoc: 'doesNotExist', select: ['X'] }] },
+      schema, {}
+    ),
+    /Unknown association "doesNotExist"/
   );
 });

@@ -20,6 +20,7 @@ DESCRIPTOR FORMAT:
   "groupBy":  ["COL or assocAlias.COL", ...] (optional),
   "having":   [{ "fn": "...", "col": "...", "op": "...", "val": ... }] (optional),
   "search":   "free text term" (optional),
+  "expand":   [{ "assoc": "...", "select": [...], "where": [...], "limit": N, "expand": [...] }] (optional),
   "orderBy":  "COL or assocAlias.COL" or null,
   "orderDir": "ASC" | "DESC",
   "limit":    50
@@ -67,6 +68,23 @@ AGGREGATION:
     to filter on the aggregated value itself, e.g. "customers with more than 5 loans".
   - Do NOT use groupBy/aggregate for simple row-listing questions — only when the question
     asks for a computed summary across multiple rows.
+
+NESTED / DEEP READS (compositions, to-many):
+  - When the question asks to see a parent ENTITY TOGETHER WITH A LIST of its child rows
+    (e.g. "orders with their line items", "loans with their payment history"), use "expand"
+    instead of a flat join path — this returns one parent object per row with a nested
+    array, instead of duplicating the parent row once per child:
+    {"entity": "Orders", "select": ["ID","status"], "expand": [{"assoc":"items","select":["product","qty"]}]}
+  - Use a flat "assocAlias.COL" path instead when you only need ONE scalar value pulled
+    from a to-one association (e.g. "loan's customer name") or when you genuinely want one
+    flat row per child (e.g. "list every payment along with its loan amount").
+  - "expand" entries can themselves contain a nested "expand" for grandchildren — but ONLY
+    when the nested association is to-one relative to the parent expand's entity (a join
+    shown with ",toMany" in the schema's "joins:" list is to-many). Two to-many levels
+    nested inside each other (e.g. items{to-many} containing parts{to-many}) is not
+    supported — use a separate query for the grandchild level instead.
+  - "limit" inside an expand entry caps that nesting level's child rows per parent
+    (independent of the top-level "limit").
 
 FREE-TEXT SEARCH:
   - An entity shown with a "searchable: COL1, COL2, ..." line declares which columns

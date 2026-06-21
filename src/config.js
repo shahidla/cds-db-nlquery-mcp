@@ -19,6 +19,9 @@ function parseList(envVar) {
  * MCP_MAX_ROWS          — hard SQL LIMIT cap per query (default 500).
  * MCP_MAX_OFFSET        — hard cap on pagination offset (default 100000), to bound
  *                          deep-pagination table scans against the DB.
+ * MCP_MAX_EXPAND_ROWS    — hard cap on child rows per "expand" nesting level (default 20),
+ *                          so a parent page of MCP_MAX_ROWS rows can't fan out into an
+ *                          unbounded number of child rows per parent.
  * MCP_DB_USER/MCP_DB_PASSWORD — connect with a different (ideally restricted, read-only)
  *                          HANA user than the consumer app's own runtime user. Host/port/
  *                          schema are reused from the project's existing DB config —
@@ -42,6 +45,7 @@ module.exports = {
   blockedColumns:  parseList(process.env.MCP_BLOCKED_COLUMNS),
   maxRows:         parseInt(process.env.MCP_MAX_ROWS || '500', 10),
   maxOffset:       parseInt(process.env.MCP_MAX_OFFSET || '100000', 10),
+  maxExpandRows:   parseInt(process.env.MCP_MAX_EXPAND_ROWS || '20', 10),
   dbUser:          process.env.MCP_DB_USER || null,
   dbPassword:      process.env.MCP_DB_PASSWORD || null,
 
