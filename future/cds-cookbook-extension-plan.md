@@ -972,25 +972,126 @@ WINDOW FUNCTIONS (ranking, "top N per group", running totals — different from 
 
 ---
 
+## 16. Combining multiple queries — UNION / INTERSECT / EXCEPT
+
+### Why this section exists (and why it's *not* in the limitations list below)
+On first pass, this document grouped `UNION`/`INTERSECT`/`EXCEPT` in with CTEs and generic
+subqueries as "architecturally hard, same risk profile as letting the LLM write arbitrary
+SQL." That was wrong. Set operations across two independently-valid queries are actually one
+of the **lowest-risk, lowest-effort** extensions in this entire document — lower than §4
+(hierarchies, needs raw SQL) and §15 (window functions, needs the CQN `{xpr}` escape hatch).
+The reason: this package already executes each descriptor down to a plain JS array of rows
+(`query-executor.js`'s `executeDescriptor` returns `rows`, an ordinary array, after enum/
+blocklist post-processing) — combining two such arrays is JS, not SQL.
+
+### CDS/CQL background
+Standard SQL: `SELECT ... FROM A ... UNION [ALL] SELECT ... FROM B ...` (also `INTERSECT`,
+`EXCEPT`), each branch must select the same number of columns with compatible types. `UNION`
+(no `ALL`) deduplicates the combined result; `UNION ALL` doesn't.
+
+### Current state
+Not supported. Each MCP tool call produces exactly one descriptor, rooted at one entity.
+"Show me all customers AND all suppliers in one list" or "accounts that appear in both the
+delinquent list and the high-value list" cannot be expressed in one call today.
+
+### Extension
+
+**1. Descriptor changes** — accept a top-level `union` (or `intersect`/`except`) array of
+**ordinary, already-supported descriptors**, each validated and executed exactly as today:
+```json
+{
+  "union": [
+    { "entity": "Customers", "select": ["PARTNER", "BU_SORT1"], "where": [...] },
+    { "entity": "Suppliers", "select": ["SUPPLIER_ID", "NAME"], "where": [...] }
+  ],
+  "distinct": false,
+  "limit": 200
+}
+```
+For `intersect`/`except`, use the same shape with the operator as the top-level key instead
+of `union`. Each branch's `select` must resolve to the same number of output columns — if the
+underlying entities have differently-named columns that represent "the same thing" (e.g.
+`PARTNER` vs `SUPPLIER_ID` both meaning "ID"), the LLM should alias them to a shared name
+(reuse the existing aliasing mechanism already in `query-executor.js:193-199` for
+leaf-name-collision aliasing).
+
+**2. `src/query-executor.js` changes** — no new CQN, no new SQL string-building:
+- Add a thin wrapper, e.g. `executeUnion(descriptor, schema, callConfig)`, that:
+  1. Validates `descriptor.union.length >= 2` and that every branch's resolved column count
+     matches (run each branch's existing column-resolution logic from `executeDescriptor`
+     far enough to get the column list before executing, to fail fast on a mismatch with a
+     clear error rather than a confusing partial result).
+  2. Calls the **existing, unmodified** `executeDescriptor()` once per branch — every
+     existing security check (entity allowlist, column blocklist, row cap) already applies
+     per-branch with zero new code, because each branch *is* a today's descriptor.
+  3. Concatenates the resulting row arrays (`[...rowsA, ...rowsB]`).
+  4. For `union` with `distinct: true`, or for `intersect`/`except`, do the set logic in JS:
+     `JSON.stringify` each row (or a canonical key built from the row's column values) into a
+     `Set`/`Map`, then filter — no SQL needed for this, plain array/object operations.
+  5. Apply the combined-result `limit` *after* combining (cap the final array length), and
+     enforce the per-branch limit *before* combining too (so one branch can't return
+     unbounded rows before the cap is applied) — same `MCP_MAX_ROWS` config already in use.
+
+**3. `src/mcp-server.js` changes** — none beyond passing the descriptor through; the tool's
+existing `natural_language_query` handler already calls into the executor generically.
+
+**4. `src/llm-planner.js` prompt changes**:
+```
+COMBINING RESULTS FROM MULTIPLE ENTITIES (UNION / INTERSECT / EXCEPT):
+  - If the question asks to see results from TWO DIFFERENT entities together in one list
+    (e.g. "all customers and all suppliers"), use:
+    {"union": [<entity-A descriptor>, <entity-B descriptor>], "distinct": false}
+  - Each branch is a normal descriptor (entity/select/where/...) — both branches MUST select
+    the same NUMBER of columns; alias columns to a shared name if the underlying column
+    names differ but represent the same thing (e.g. both aliased to "id", "name").
+  - Use "intersect" for "appears in both X and Y," "except" for "appears in X but not Y" —
+    same branch-descriptor shape, different top-level key.
+  - Do NOT use this for joining related data from one entity to another via an association —
+    that's a normal join path (unchanged), not a union. Union is for combining two
+    conceptually separate result sets, not for relating rows to each other.
+```
+
+### Worked example
+*"List all customers and all suppliers together, with just their ID and name."*
+```json
+{
+  "union": [
+    { "entity": "Customers", "select": [{ "col": "PARTNER", "as": "id" }, { "col": "BU_SORT1", "as": "name" }] },
+    { "entity": "Suppliers", "select": [{ "col": "SUPPLIER_ID", "as": "id" }, { "col": "NAME", "as": "name" }] }
+  ],
+  "distinct": false,
+  "limit": 200
+}
+```
+(Note: this also requires extending `select` to optionally carry an explicit alias per
+column — `{ "col": "...", "as": "..." }` instead of a bare string — a small, low-risk
+addition to the existing `select` handling in `query-executor.js:178-209`, useful on its own
+even outside of `union`.)
+
+---
+
 ## Known limitations vs. full hand-written SQL — what stays out of scope, and why
 
 The question this section answers: *"If I gave this database to someone who knows SQL well,
 they could write any query they wanted — CTEs, window functions, subqueries, pivots, set
 operations, whatever the question needs. Can this package eventually do the same?"*
 
-**Short answer: mostly yes, for the question *shapes* that come up in practice — §1–§15 above
-cover aggregation, grouping, OR logic, existence checks, recursion, deep reads, and now
-ranking/partitioning/running totals, which together account for the large majority of
-real-world ad-hoc business questions. But this package is deliberately NOT, and should not
-become, a generic "let the LLM write and execute arbitrary SQL" engine.** The descriptor-JSON
-architecture is a constraint applied on purpose, not a temporary limitation waiting to be
-lifted. The list below is what remains genuinely out of scope even after implementing every
-extension in this document, and the architectural reason it's drawn there.
+**Short answer: mostly yes, for the question *shapes* that come up in practice — §1–§16 above
+cover aggregation, grouping, OR logic, existence checks, recursion, deep reads,
+ranking/partitioning/running totals, and combining multiple entities' results, which together
+account for the large majority of real-world ad-hoc business questions. But this package is
+deliberately NOT, and should not become, a generic "let the LLM write and execute arbitrary
+SQL" engine.** The descriptor-JSON architecture is a constraint applied on purpose, not a
+temporary limitation waiting to be lifted. The list below is what remains genuinely out of
+scope even after implementing every extension in this document, and the architectural reason
+it's drawn there. (Note: an earlier draft of this table also listed `UNION`/`INTERSECT`/
+`EXCEPT` here — on review that was a mistake. Those are pure JS array operations on top of
+the *existing*, already-validated per-entity execution path, not a new SQL-structure risk —
+see §16 above, where they're now specified as a proper extension instead.)
 
-| Capability | Status after §1–§15 | Why it's still out of scope |
+| Capability | Status after §1–§16 | Why it's still out of scope |
 |---|---|---|
 | `WITH ... AS (...)` CTEs (general-purpose) | Not supported, except the one narrow raw-SQL CTE used internally for SQLite recursive hierarchy traversal (§4) | A general CTE feature means accepting arbitrary multi-step query structure from the LLM — at that point you're no longer validating a finite, known vocabulary, you're validating arbitrary SQL structure, which is a different and much harder security problem. |
-| `UNION` / `INTERSECT` / `EXCEPT` across entities or across two differently-shaped queries | Not supported | The descriptor is rooted at exactly one entity per call. Combining two different entities' result sets is a different mental model than "ask a question about your data" and most natural-language questions don't actually need it — they need a join (already supported) or two separate tool calls. |
 | Arbitrary correlated scalar subquery as a `SELECT` column (e.g. `(SELECT MAX(x) FROM y WHERE ...) AS col`) | Not supported as a generic feature | Only two specific, validated subquery *shapes* are supported: `exists`/`notExists` (§3) and the window-function derived-table wrap (§15). A generic "put any subquery anywhere" escape hatch reopens the same arbitrary-structure problem as CTEs. |
 | `CASE WHEN ... THEN ... ELSE ... END` computed expressions in `select` | Not covered by any section above — a genuine, not-yet-planned gap | Listed here deliberately so it isn't mistaken for "already handled." If needed, it should be added the same way every other section was: a `caseWhen` descriptor field, a CQN `{xpr:[...]}` builder with schema-validated identifiers only, and an explicit planner prompt rule — same pattern as §15, not a special exception. |
 | `FULL OUTER JOIN` | Not supported | CDS associations themselves only model `INNER`/`LEFT` cardinality-derived joins (`schema-reader.js:96-97`) — CAP's own modeling layer doesn't expose `FULL OUTER` as an association concept, so there's no schema-level hook to drive it from. Achievable only via raw SQL, which would need its own dedicated (and carefully scoped) extension. |
@@ -1023,18 +1124,18 @@ purpose, because that's what makes the following three guarantees possible at al
    weaker than "the capability doesn't exist in the vocabulary at all."
 
 **If full arbitrary-SQL parity is genuinely required** — i.e., a use case that truly cannot
-be expressed by any combination of §1–§15 (CTEs, pivots, full outer joins, procedure calls) —
-that is a different and strictly higher-risk product, not an extension of this one. It should
-be a separate, explicitly opt-in mode: a distinct tool name (e.g. `raw_sql_query`, never the
-same tool as `natural_language_query`), gated behind its own config flag (e.g.
-`MCP_ENABLE_RAW_SQL=false` by default), with its own independent safeguards — a strict
-single-`SELECT`-statement validator that rejects multiple statements, DDL/DML keywords, and
-comment-hiding tricks; mandatory use of the restricted read-only `MCP_DB_USER` (never the
-app's default connection); and ideally execution inside an explicitly read-only transaction
-if the driver supports one. **Recommendation: implement §1–§15 first** — they cover the
-overwhelming majority of real question shapes, including ranking and partitioning — and only
-consider a raw-SQL mode if a specific, concrete question genuinely cannot be expressed any
-other way.
+be expressed by any combination of §1–§16 (CTEs, pivots, full outer joins, procedure calls,
+arbitrary CASE expressions) — that is a different and strictly higher-risk product, not an
+extension of this one. It should be a separate, explicitly opt-in mode: a distinct tool name
+(e.g. `raw_sql_query`, never the same tool as `natural_language_query`), gated behind its own
+config flag (e.g. `MCP_ENABLE_RAW_SQL=false` by default), with its own independent
+safeguards — a strict single-`SELECT`-statement validator that rejects multiple statements,
+DDL/DML keywords, and comment-hiding tricks; mandatory use of the restricted read-only
+`MCP_DB_USER` (never the app's default connection); and ideally execution inside an
+explicitly read-only transaction if the driver supports one. **Recommendation: implement
+§1–§16 first** — they cover the overwhelming majority of real question shapes, including
+ranking, partitioning, and multi-entity combination — and only consider a raw-SQL mode if a
+specific, concrete question genuinely cannot be expressed any other way.
 
 ---
 
@@ -1067,11 +1168,15 @@ Ordered by (impact) ÷ (implementation risk), not strict dependency:
     vocabulary and the same "verify cds.ql builder support, fall back to validated raw SQL"
     risk profile as §4); do after §1–§4 are in and tested, since `windowFilter` reuses the
     condition-group logic from §2.
-14. **§14** Locale awareness — nice-to-have, no urgency.
+14. **§16** UNION/INTERSECT/EXCEPT — despite appearing last numerically, this is one of the
+    *lowest*-risk items on the whole list (pure JS array combination over the existing,
+    already-validated single-entity execution path, no new SQL) — good candidate to pull
+    forward and do early/cheaply alongside §2 if multi-entity questions come up often.
+15. **§14** Locale awareness — nice-to-have, no urgency.
 
 See "Known limitations vs. full hand-written SQL" above for what's deliberately **not** on
-this list (CTEs, UNION/INTERSECT/EXCEPT, generic subqueries, CASE expressions, full outer
-joins, stored procedures, writes, pivot/unpivot) and why.
+this list (CTEs, generic subqueries, CASE expressions, full outer joins, stored procedures,
+writes, pivot/unpivot) and why.
 
 ## Cross-cutting implementation notes for whoever picks this up
 
