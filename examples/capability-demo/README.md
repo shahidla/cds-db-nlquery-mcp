@@ -36,7 +36,13 @@ database (via `@cap-js/sqlite`), not hand-written or recalled from memory. Re-ru
   every entry in `queries.js` through `executeDescriptor()` for real, capturing:
   - the exact CQN object(s) the executor built (a hierarchy query issues one CQN
     SELECT per tree level, captured in order)
-  - the actual generated SQL for each CQN, via `db.cqn2sql(query).sql`
+  - the actual generated SQL for each CQN, via `db.cqn2sql(query).sql` (parameterized,
+    with `?` placeholders — the raw form CAP itself produces)
+  - a human-readable equivalent of that same SQL (`readableSql`) — bind values
+    inlined as literals and keywords broken onto their own line, for eyeballing
+    or diffing against a BTP deployment by hand. **Inlining literals this way is
+    not SQL-injection-safe and this string is never used to execute anything** —
+    it exists purely for this `results.json` file, not as a re-runnable query.
   - the actual result rows returned by the (real, in-memory) database
   - or the actual error message thrown, for the `error: true` entries
 - `schema-prompt.txt` — the exact text `buildSchemaPrompt()` produces for this

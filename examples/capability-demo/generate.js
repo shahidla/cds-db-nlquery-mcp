@@ -16,6 +16,35 @@ const cds = require('@sap/cds');
 const { buildSchema, buildSchemaPrompt } = require(path.join(REPO_ROOT, 'src/schema-reader'));
 const { executeDescriptor } = require(path.join(REPO_ROOT, 'src/query-executor'));
 
+// Turns a parameterized SQL string + its bind values (both straight from
+// db.cqn2sql()) into a single self-contained, human-readable statement —
+// literal values substituted in place of "?", and keywords broken onto
+// their own lines. For eyeballing/comparing against a BTP deployment by hand,
+// not for re-execution (the literal-substitution here is not SQL-injection-safe
+// and must never be used to build a query that actually runs).
+function sqlLiteral(val) {
+  if (val === null || val === undefined) return 'NULL';
+  if (typeof val === 'number' || typeof val === 'boolean') return String(val);
+  return `'${String(val).replace(/'/g, "''")}'`;
+}
+
+function toReadableSql(sql, values) {
+  // Break onto separate lines on the placeholder-only SQL (so " and "/" or "
+  // splitting can never misfire on a literal value's text), THEN inline the
+  // actual bind values — order matters.
+  const broken = sql
+    .replace(/\bFROM\b/g, '\nFROM')
+    .replace(/\bWHERE\b/g, '\nWHERE')
+    .replace(/\bGROUP BY\b/g, '\nGROUP BY')
+    .replace(/\bHAVING\b/g, '\nHAVING')
+    .replace(/\bORDER BY\b/g, '\nORDER BY')
+    .replace(/\bLIMIT\b/g, '\nLIMIT')
+    .replace(/ and /g, '\n  AND ')
+    .replace(/ or /g, '\n  OR ');
+  let i = 0;
+  return broken.replace(/\?/g, () => sqlLiteral(values[i++]));
+}
+
 async function main() {
   const csn = await cds.load(path.join(DEMO_DIR, 'schema.cds'));
   const model = cds.linked(csn);
@@ -47,12 +76,19 @@ async function main() {
       entry.sql = capturedCqn.map(c => {
         try { return db.cqn2sql(c).sql; } catch (e) { return `<sql generation failed: ${e.message}>`; }
       });
+      entry.readableSql = capturedCqn.map(c => {
+        try {
+          const { sql, values } = db.cqn2sql(c);
+          return toReadableSql(sql, values);
+        } catch (e) { return `<sql generation failed: ${e.message}>`; }
+      });
       entry.rows = rows;
       entry.error = null;
     } catch (e) {
       cds.run = cds.run; // no-op; ensure restored even on throw path above
       entry.cqn = null;
       entry.sql = null;
+      entry.readableSql = null;
       entry.rows = null;
       entry.error = e.message;
     }

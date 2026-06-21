@@ -94,6 +94,9 @@
     "sql": [
       "SELECT \"$O\".ID,\"$O\".CUSTOMER_ID,\"$O\".AMOUNT,\"$O\".CURRENCY,\"$O\".STATUS FROM capdemo_Orders as \"$O\" WHERE \"$O\".CUSTOMER_ID = ? and \"$O\".STATUS = ? LIMIT ? OFFSET ?"
     ],
+    "readableSql": [
+      "SELECT \"$O\".ID,\"$O\".CUSTOMER_ID,\"$O\".AMOUNT,\"$O\".CURRENCY,\"$O\".STATUS \nFROM capdemo_Orders as \"$O\" \nWHERE \"$O\".CUSTOMER_ID = 'C1'\n  AND \"$O\".STATUS = 'O' \nLIMIT 50 OFFSET 0"
+    ],
     "rows": [
       {
         "ID": "O1",
@@ -179,6 +182,9 @@
     ],
     "sql": [
       "SELECT \"$O\".CUSTOMER_ID,sum(\"$O\".AMOUNT) as TOTAL_AMOUNT FROM capdemo_Orders as \"$O\" GROUP BY \"$O\".CUSTOMER_ID LIMIT ? OFFSET ?"
+    ],
+    "readableSql": [
+      "SELECT \"$O\".CUSTOMER_ID,sum(\"$O\".AMOUNT) as TOTAL_AMOUNT \nFROM capdemo_Orders as \"$O\" \nGROUP BY \"$O\".CUSTOMER_ID \nLIMIT 50 OFFSET 0"
     ],
     "rows": [
       {
@@ -286,6 +292,9 @@
     ],
     "sql": [
       "SELECT \"$O\".ID,\"$O\".STATUS,\"$O\".AMOUNT FROM capdemo_Orders as \"$O\" WHERE (\"$O\".STATUS = ? or \"$O\".AMOUNT > ?) LIMIT ? OFFSET ?"
+    ],
+    "readableSql": [
+      "SELECT \"$O\".ID,\"$O\".STATUS,\"$O\".AMOUNT \nFROM capdemo_Orders as \"$O\" \nWHERE (\"$O\".STATUS = 'O'\n  OR \"$O\".AMOUNT > 2000) \nLIMIT 50 OFFSET 0"
     ],
     "rows": [
       {
@@ -408,6 +417,9 @@
     "sql": [
       "SELECT \"$C\".ID,\"$C\".NAME FROM capdemo_Customers as \"$C\" WHERE (exists (SELECT 1 as \"1\" FROM capdemo_Orders as \"$o\" WHERE \"$o\".CUSTOMER_ID = \"$C\".ID and \"$o\".STATUS = ?)) LIMIT ? OFFSET ?"
     ],
+    "readableSql": [
+      "SELECT \"$C\".ID,\"$C\".NAME \nFROM capdemo_Customers as \"$C\" \nWHERE (exists (SELECT 1 as \"1\" \nFROM capdemo_Orders as \"$o\" \nWHERE \"$o\".CUSTOMER_ID = \"$C\".ID\n  AND \"$o\".STATUS = 'O')) \nLIMIT 50 OFFSET 0"
+    ],
     "rows": [
       {
         "ID": "C1",
@@ -486,6 +498,9 @@
     "sql": [
       "SELECT \"$C\".ID,\"$C\".NAME FROM capdemo_Customers as \"$C\" WHERE (not exists (SELECT 1 as \"1\" FROM capdemo_Orders as \"$o\" WHERE \"$o\".CUSTOMER_ID = \"$C\".ID)) LIMIT ? OFFSET ?"
     ],
+    "readableSql": [
+      "SELECT \"$C\".ID,\"$C\".NAME \nFROM capdemo_Customers as \"$C\" \nWHERE (not exists (SELECT 1 as \"1\" \nFROM capdemo_Orders as \"$o\" \nWHERE \"$o\".CUSTOMER_ID = \"$C\".ID)) \nLIMIT 50 OFFSET 0"
+    ],
     "rows": [
       {
         "ID": "C4",
@@ -550,6 +565,9 @@
     "sql": [
       "SELECT \"$O\".ID as ID,\"$O\".AMOUNT FROM capdemo_Orders as \"$O\" ORDER BY ID ASC LIMIT ? OFFSET ?"
     ],
+    "readableSql": [
+      "SELECT \"$O\".ID as ID,\"$O\".AMOUNT \nFROM capdemo_Orders as \"$O\" \nORDER BY ID ASC \nLIMIT 2 OFFSET 2"
+    ],
     "rows": [
       {
         "ID": "O3",
@@ -612,6 +630,9 @@
     ],
     "sql": [
       "SELECT \"$L\".ID,\"$L\".SECTOR,sector.DESCRIPTION as sector_DESCRIPTION FROM capdemo_Loans as \"$L\" left JOIN capdemo_Sectors as sector ON sector.CODE = \"$L\".SECTOR LIMIT ? OFFSET ?"
+    ],
+    "readableSql": [
+      "SELECT \"$L\".ID,\"$L\".SECTOR,sector.DESCRIPTION as sector_DESCRIPTION \nFROM capdemo_Loans as \"$L\" left JOIN capdemo_Sectors as sector ON sector.CODE = \"$L\".SECTOR \nLIMIT 50 OFFSET 0"
     ],
     "rows": [
       {
@@ -681,6 +702,9 @@
     ],
     "sql": [
       "SELECT \"$O\".ID,\"$O\".AMOUNT,\"$O\".CURRENCY FROM capdemo_Orders as \"$O\" LIMIT ? OFFSET ?"
+    ],
+    "readableSql": [
+      "SELECT \"$O\".ID,\"$O\".AMOUNT,\"$O\".CURRENCY \nFROM capdemo_Orders as \"$O\" \nLIMIT 50 OFFSET 0"
     ],
     "rows": [
       {
@@ -778,6 +802,9 @@
     "sql": [
       "SELECT \"$L\".ID,\"$L\".DTI FROM capdemo_Loans as \"$L\" WHERE \"$L\".DTI > ? LIMIT ? OFFSET ?"
     ],
+    "readableSql": [
+      "SELECT \"$L\".ID,\"$L\".DTI \nFROM capdemo_Loans as \"$L\" \nWHERE \"$L\".DTI > 50 \nLIMIT 50 OFFSET 0"
+    ],
     "rows": [
       {
         "ID": "L3",
@@ -872,6 +899,9 @@
     "sql": [
       "SELECT \"$C\".ID,\"$C\".NAME,\"$C\".NOTES FROM capdemo_Customers as \"$C\" WHERE (upper(\"$C\".NAME) like ? or upper(\"$C\".NOTES) like ?) LIMIT ? OFFSET ?"
     ],
+    "readableSql": [
+      "SELECT \"$C\".ID,\"$C\".NAME,\"$C\".NOTES \nFROM capdemo_Customers as \"$C\" \nWHERE (upper(\"$C\".NAME) like '%ACME%'\n  OR upper(\"$C\".NOTES) like '%ACME%') \nLIMIT 50 OFFSET 0"
+    ],
     "rows": [
       {
         "ID": "C1",
@@ -924,6 +954,9 @@
     ],
     "sql": [
       "SELECT \"$O\".ID,\"$O\".STATUS FROM capdemo_Orders as \"$O\" LIMIT ? OFFSET ?"
+    ],
+    "readableSql": [
+      "SELECT \"$O\".ID,\"$O\".STATUS \nFROM capdemo_Orders as \"$O\" \nLIMIT 50 OFFSET 0"
     ],
     "rows": [
       {
@@ -1002,6 +1035,9 @@
     ],
     "sql": [
       "SELECT \"$C\".ID,\"$C\".\"FIRST\" || ? || \"$C\".\"LAST\" as \"FULL\" FROM capdemo_Customers as \"$C\" LIMIT ? OFFSET ?"
+    ],
+    "readableSql": [
+      "SELECT \"$C\".ID,\"$C\".\"FIRST\" || ' ' || \"$C\".\"LAST\" as \"FULL\" \nFROM capdemo_Customers as \"$C\" \nLIMIT 50 OFFSET 0"
     ],
     "rows": [
       {
@@ -1114,6 +1150,9 @@
     "sql": [
       "SELECT \"$O\".CUSTOMER_ID,count(\"$O\".ID) as ORDER_COUNT FROM capdemo_Orders as \"$O\" GROUP BY \"$O\".CUSTOMER_ID HAVING count(\"$O\".ID) > ? LIMIT ? OFFSET ?"
     ],
+    "readableSql": [
+      "SELECT \"$O\".CUSTOMER_ID,count(\"$O\".ID) as ORDER_COUNT \nFROM capdemo_Orders as \"$O\" \nGROUP BY \"$O\".CUSTOMER_ID \nHAVING count(\"$O\".ID) > 1 \nLIMIT 50 OFFSET 0"
+    ],
     "rows": [
       {
         "CUSTOMER_ID": "C1",
@@ -1198,6 +1237,9 @@
     "sql": [
       "SELECT \"$O\".ID,\"$O\".ORDER_DATE FROM capdemo_Orders as \"$O\" WHERE \"$O\".ORDER_DATE >= ? and \"$O\".ORDER_DATE <= ? LIMIT ? OFFSET ?"
     ],
+    "readableSql": [
+      "SELECT \"$O\".ID,\"$O\".ORDER_DATE \nFROM capdemo_Orders as \"$O\" \nWHERE \"$O\".ORDER_DATE >= '2026-04-22'\n  AND \"$O\".ORDER_DATE <= '2026-06-21' \nLIMIT 50 OFFSET 0"
+    ],
     "rows": [
       {
         "ID": "O1",
@@ -1234,6 +1276,7 @@
     },
     "cqn": null,
     "sql": null,
+    "readableSql": null,
     "rows": null,
     "error": "Unknown entity \"InternalAudit\". Known: Customers, Orders, OrderItems, Accounts, Sectors, Loans, WorkAssignments"
   },
@@ -1497,6 +1540,13 @@
       "SELECT \"$A\".ID,\"$A\".PARENT_ID,\"$A\".NAME FROM capdemo_Accounts as \"$A\" WHERE \"$A\".PARENT_ID in (?,?) LIMIT ?",
       "SELECT \"$A\".ID,\"$A\".PARENT_ID,\"$A\".NAME FROM capdemo_Accounts as \"$A\" WHERE \"$A\".PARENT_ID in (?) LIMIT ?"
     ],
+    "readableSql": [
+      "SELECT \"$A\".ID,\"$A\".PARENT_ID,\"$A\".NAME \nFROM capdemo_Accounts as \"$A\" \nWHERE \"$A\".ID = 'A1' \nLIMIT 51",
+      "SELECT \"$A\".ID,\"$A\".PARENT_ID,\"$A\".NAME \nFROM capdemo_Accounts as \"$A\" \nWHERE \"$A\".PARENT_ID in ('A1') \nLIMIT 50",
+      "SELECT \"$A\".ID,\"$A\".PARENT_ID,\"$A\".NAME \nFROM capdemo_Accounts as \"$A\" \nWHERE \"$A\".PARENT_ID in ('A2') \nLIMIT 49",
+      "SELECT \"$A\".ID,\"$A\".PARENT_ID,\"$A\".NAME \nFROM capdemo_Accounts as \"$A\" \nWHERE \"$A\".PARENT_ID in ('A3','A4') \nLIMIT 47",
+      "SELECT \"$A\".ID,\"$A\".PARENT_ID,\"$A\".NAME \nFROM capdemo_Accounts as \"$A\" \nWHERE \"$A\".PARENT_ID in ('A5') \nLIMIT 46"
+    ],
     "rows": [
       {
         "ID": "A1",
@@ -1736,6 +1786,12 @@
       "SELECT \"$A\".PARENT_ID,\"$A\".ID,\"$A\".NAME FROM capdemo_Accounts as \"$A\" WHERE \"$A\".ID in (?) LIMIT ?",
       "SELECT \"$A\".PARENT_ID,\"$A\".ID,\"$A\".NAME FROM capdemo_Accounts as \"$A\" WHERE \"$A\".ID in (?) LIMIT ?"
     ],
+    "readableSql": [
+      "SELECT \"$A\".PARENT_ID,\"$A\".ID,\"$A\".NAME \nFROM capdemo_Accounts as \"$A\" \nWHERE \"$A\".ID = 'A5' \nLIMIT 51",
+      "SELECT \"$A\".PARENT_ID,\"$A\".ID,\"$A\".NAME \nFROM capdemo_Accounts as \"$A\" \nWHERE \"$A\".ID in ('A3') \nLIMIT 50",
+      "SELECT \"$A\".PARENT_ID,\"$A\".ID,\"$A\".NAME \nFROM capdemo_Accounts as \"$A\" \nWHERE \"$A\".ID in ('A2') \nLIMIT 49",
+      "SELECT \"$A\".PARENT_ID,\"$A\".ID,\"$A\".NAME \nFROM capdemo_Accounts as \"$A\" \nWHERE \"$A\".ID in ('A1') \nLIMIT 48"
+    ],
     "rows": [
       {
         "ID": "A5",
@@ -1834,6 +1890,9 @@
     ],
     "sql": [
       "SELECT \"$O\".ID,\"$O\".CUSTOMER_ID,(SELECT jsonb_group_array(jsonb_insert('{}','$.\"PRODUCT\"',PRODUCT,'$.\"QTY\"',QTY)) as _json_ FROM (SELECT \"$i\".PRODUCT,\"$i\".QTY FROM capdemo_OrderItems as \"$i\" WHERE \"$i\".ORDER_ID = \"$O\".ID LIMIT ?)) as items FROM capdemo_Orders as \"$O\" LIMIT ? OFFSET ?"
+    ],
+    "readableSql": [
+      "SELECT \"$O\".ID,\"$O\".CUSTOMER_ID,(SELECT jsonb_group_array(jsonb_insert('{}','$.\"PRODUCT\"',PRODUCT,'$.\"QTY\"',QTY)) as _json_ \nFROM (SELECT \"$i\".PRODUCT,\"$i\".QTY \nFROM capdemo_OrderItems as \"$i\" \nWHERE \"$i\".ORDER_ID = \"$O\".ID \nLIMIT 20)) as items \nFROM capdemo_Orders as \"$O\" \nLIMIT 50 OFFSET 0"
     ],
     "rows": [
       {
@@ -1997,6 +2056,9 @@
     "sql": [
       "SELECT \"$C\".ID,\"$C\".NAME,sum(orders.AMOUNT) as OPEN_ORDERS_TOTAL FROM capdemo_Customers as \"$C\" left JOIN capdemo_Orders as orders ON orders.CUSTOMER_ID = \"$C\".ID and orders.STATUS = ? GROUP BY \"$C\".ID,\"$C\".NAME LIMIT ? OFFSET ?"
     ],
+    "readableSql": [
+      "SELECT \"$C\".ID,\"$C\".NAME,sum(orders.AMOUNT) as OPEN_ORDERS_TOTAL \nFROM capdemo_Customers as \"$C\" left JOIN capdemo_Orders as orders ON orders.CUSTOMER_ID = \"$C\".ID\n  AND orders.STATUS = 'O' \nGROUP BY \"$C\".ID,\"$C\".NAME \nLIMIT 50 OFFSET 0"
+    ],
     "rows": [
       {
         "ID": "C1",
@@ -2112,6 +2174,9 @@
     ],
     "sql": [
       "SELECT \"$O\".ID,\"$O\".CUSTOMER_ID,\"$O\".AMOUNT,rank() over (partition by \"$O\".CUSTOMER_ID order by \"$O\".AMOUNT desc) as RANK_IN_CUSTOMER FROM capdemo_Orders as \"$O\" LIMIT ? OFFSET ?"
+    ],
+    "readableSql": [
+      "SELECT \"$O\".ID,\"$O\".CUSTOMER_ID,\"$O\".AMOUNT,rank() over (partition by \"$O\".CUSTOMER_ID order by \"$O\".AMOUNT desc) as RANK_IN_CUSTOMER \nFROM capdemo_Orders as \"$O\" \nLIMIT 50 OFFSET 0"
     ],
     "rows": [
       {
@@ -2267,6 +2332,9 @@
     "sql": [
       "SELECT __select__2.ID,__select__2.CUSTOMER_ID,__select__2.AMOUNT,__select__2.RANK_IN_CUSTOMER FROM (SELECT \"$O\".ID,\"$O\".CUSTOMER_ID,\"$O\".AMOUNT,rank() over (partition by \"$O\".CUSTOMER_ID order by \"$O\".AMOUNT desc) as RANK_IN_CUSTOMER FROM capdemo_Orders as \"$O\") as __select__2 WHERE __select__2.RANK_IN_CUSTOMER = ? LIMIT ? OFFSET ?"
     ],
+    "readableSql": [
+      "SELECT __select__3.ID,__select__3.CUSTOMER_ID,__select__3.AMOUNT,__select__3.RANK_IN_CUSTOMER \nFROM (SELECT \"$O\".ID,\"$O\".CUSTOMER_ID,\"$O\".AMOUNT,rank() over (partition by \"$O\".CUSTOMER_ID order by \"$O\".AMOUNT desc) as RANK_IN_CUSTOMER \nFROM capdemo_Orders as \"$O\") as __select__3 \nWHERE __select__3.RANK_IN_CUSTOMER = 1 \nLIMIT 50 OFFSET 0"
+    ],
     "rows": [
       {
         "ID": "O2",
@@ -2394,6 +2462,9 @@
     "sql": [
       "SELECT \"$O\".ID,\"$O\".CUSTOMER_ID,\"$O\".ORDER_DATE,\"$O\".AMOUNT,sum(\"$O\".AMOUNT) over (partition by \"$O\".CUSTOMER_ID order by \"$O\".ORDER_DATE asc) as RUNNING_TOTAL FROM capdemo_Orders as \"$O\" LIMIT ? OFFSET ?"
     ],
+    "readableSql": [
+      "SELECT \"$O\".ID,\"$O\".CUSTOMER_ID,\"$O\".ORDER_DATE,\"$O\".AMOUNT,sum(\"$O\".AMOUNT) over (partition by \"$O\".CUSTOMER_ID order by \"$O\".ORDER_DATE asc) as RUNNING_TOTAL \nFROM capdemo_Orders as \"$O\" \nLIMIT 50 OFFSET 0"
+    ],
     "rows": [
       {
         "ID": "O1",
@@ -2462,6 +2533,7 @@
     },
     "cqn": null,
     "sql": null,
+    "readableSql": null,
     "rows": null,
     "error": "\"customer\" is not a self-referencing association — \"hierarchy\" requires one (see the schema's \"self-referencing — hierarchy\" marker)."
   },
@@ -2497,6 +2569,7 @@
     },
     "cqn": null,
     "sql": null,
+    "readableSql": null,
     "rows": null,
     "error": "\"window\" cannot be combined with aggregate, groupBy, having, or expand."
   },
@@ -2586,6 +2659,9 @@
     ],
     "sql": [
       "SELECT \"$O\".ID,\"$O\".AMOUNT,case when \"$O\".AMOUNT > ? then ? else ? end as SIZE_LABEL FROM capdemo_Orders as \"$O\" LIMIT ? OFFSET ?"
+    ],
+    "readableSql": [
+      "SELECT \"$O\".ID,\"$O\".AMOUNT,case when \"$O\".AMOUNT > 2000 then 'Large' else 'Small' end as SIZE_LABEL \nFROM capdemo_Orders as \"$O\" \nLIMIT 50 OFFSET 0"
     ],
     "rows": [
       {
@@ -2761,6 +2837,10 @@
       "SELECT \"$C\".ID,\"$C\".NAME FROM capdemo_Customers as \"$C\" WHERE \"$C\".NAME = ? LIMIT ? OFFSET ?",
       "SELECT \"$C\".ID,\"$C\".NAME FROM capdemo_Customers as \"$C\" WHERE (exists (SELECT 1 as \"1\" FROM capdemo_Orders as \"$o\" WHERE \"$o\".CUSTOMER_ID = \"$C\".ID and \"$o\".AMOUNT > ?)) LIMIT ? OFFSET ?"
     ],
+    "readableSql": [
+      "SELECT \"$C\".ID,\"$C\".NAME \nFROM capdemo_Customers as \"$C\" \nWHERE \"$C\".NAME = 'Acme Corp' \nLIMIT 50 OFFSET 0",
+      "SELECT \"$C\".ID,\"$C\".NAME \nFROM capdemo_Customers as \"$C\" \nWHERE (exists (SELECT 1 as \"1\" \nFROM capdemo_Orders as \"$o\" \nWHERE \"$o\".CUSTOMER_ID = \"$C\".ID\n  AND \"$o\".AMOUNT > 4000)) \nLIMIT 50 OFFSET 0"
+    ],
     "rows": [
       {
         "ID": "C1",
@@ -2931,6 +3011,10 @@
       "SELECT \"$C\".ID,\"$C\".NAME FROM capdemo_Customers as \"$C\" WHERE (exists (SELECT 1 as \"1\" FROM capdemo_Orders as \"$o\" WHERE \"$o\".CUSTOMER_ID = \"$C\".ID and \"$o\".STATUS = ?)) LIMIT ? OFFSET ?",
       "SELECT \"$C\".ID,\"$C\".NAME FROM capdemo_Customers as \"$C\" WHERE (upper(\"$C\".NAME) like ? or upper(\"$C\".NOTES) like ?) LIMIT ? OFFSET ?"
     ],
+    "readableSql": [
+      "SELECT \"$C\".ID,\"$C\".NAME \nFROM capdemo_Customers as \"$C\" \nWHERE (exists (SELECT 1 as \"1\" \nFROM capdemo_Orders as \"$o\" \nWHERE \"$o\".CUSTOMER_ID = \"$C\".ID\n  AND \"$o\".STATUS = 'O')) \nLIMIT 50 OFFSET 0",
+      "SELECT \"$C\".ID,\"$C\".NAME \nFROM capdemo_Customers as \"$C\" \nWHERE (upper(\"$C\".NAME) like '%GLOBEX%'\n  OR upper(\"$C\".NOTES) like '%GLOBEX%') \nLIMIT 50 OFFSET 0"
+    ],
     "rows": [
       {
         "ID": "C2",
@@ -3042,6 +3126,10 @@
       "SELECT \"$C\".ID,\"$C\".NAME FROM capdemo_Customers as \"$C\" LIMIT ? OFFSET ?",
       "SELECT \"$C\".ID,\"$C\".NAME FROM capdemo_Customers as \"$C\" WHERE (not exists (SELECT 1 as \"1\" FROM capdemo_Orders as \"$o\" WHERE \"$o\".CUSTOMER_ID = \"$C\".ID)) LIMIT ? OFFSET ?"
     ],
+    "readableSql": [
+      "SELECT \"$C\".ID,\"$C\".NAME \nFROM capdemo_Customers as \"$C\" \nLIMIT 50 OFFSET 0",
+      "SELECT \"$C\".ID,\"$C\".NAME \nFROM capdemo_Customers as \"$C\" \nWHERE (not exists (SELECT 1 as \"1\" \nFROM capdemo_Orders as \"$o\" \nWHERE \"$o\".CUSTOMER_ID = \"$C\".ID)) \nLIMIT 50 OFFSET 0"
+    ],
     "rows": [
       {
         "ID": "C1",
@@ -3141,6 +3229,9 @@
     "sql": [
       "SELECT \"$W\".EMPLOYEE,\"$W\".ROLE FROM capdemo_WorkAssignments as \"$W\" WHERE \"$W\".EMPLOYEE = ? and \"$W\".validFrom <= ? and \"$W\".validTo > ? LIMIT ? OFFSET ?"
     ],
+    "readableSql": [
+      "SELECT \"$W\".EMPLOYEE,\"$W\".ROLE \nFROM capdemo_WorkAssignments as \"$W\" \nWHERE \"$W\".EMPLOYEE = 'Alice'\n  AND \"$W\".validFrom <= '2026-02-15'\n  AND \"$W\".validTo > '2026-02-15' \nLIMIT 50 OFFSET 0"
+    ],
     "rows": [
       {
         "EMPLOYEE": "Alice",
@@ -3204,7 +3295,7 @@
             },
             "<=",
             {
-              "val": "2026-06-21T05:57:45.133Z"
+              "val": "2026-06-21T06:10:47.508Z"
             },
             "and",
             {
@@ -3214,7 +3305,7 @@
             },
             ">",
             {
-              "val": "2026-06-21T05:57:45.133Z"
+              "val": "2026-06-21T06:10:47.508Z"
             }
           ],
           "limit": {
@@ -3230,6 +3321,9 @@
     ],
     "sql": [
       "SELECT \"$W\".EMPLOYEE,\"$W\".ROLE FROM capdemo_WorkAssignments as \"$W\" WHERE \"$W\".EMPLOYEE = ? and \"$W\".validFrom <= ? and \"$W\".validTo > ? LIMIT ? OFFSET ?"
+    ],
+    "readableSql": [
+      "SELECT \"$W\".EMPLOYEE,\"$W\".ROLE \nFROM capdemo_WorkAssignments as \"$W\" \nWHERE \"$W\".EMPLOYEE = 'Alice'\n  AND \"$W\".validFrom <= '2026-06-21T06:10:47.508Z'\n  AND \"$W\".validTo > '2026-06-21T06:10:47.508Z' \nLIMIT 50 OFFSET 0"
     ],
     "rows": [
       {
