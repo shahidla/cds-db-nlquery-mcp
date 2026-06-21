@@ -59,6 +59,20 @@ RANGE HINTS:
     scale than that the data is wrong — double check the column choice and value before
     emitting the filter (e.g. a percentage 0-1 vs 0-100 mismatch).
 
+FILTERED JOINS (only matters together with aggregation):
+  - "Total of OPEN payments per loan" needs the OPEN filter applied INSIDE the join to
+    payments, not as a top-level WHERE on the outer query — a top-level WHERE on an
+    aggregated query would incorrectly exclude loans whose ONLY payments are non-OPEN,
+    rather than just excluding non-OPEN payments from the sum. Replace the plain column
+    path with this structured form wherever a "col"/"valCol" is used (select, where,
+    aggregate.col, having.col — NOT groupBy/orderBy):
+    {"col": "AMOUNT", "viaFiltered": {"assoc": "payments", "where": [{"col":"STATUS","op":"=","val":"OPEN"}]}}
+    Used in an aggregate, e.g.: {"fn":"sum","col":{"col":"AMOUNT","viaFiltered":{"assoc":"payments","where":[{"col":"STATUS","op":"=","val":"OPEN"}]}},"as":"open_total"}
+  - viaFiltered.where conditions must be plain columns of the filtered association's
+    OWN target entity — never a further "assoc.COL" path off of it.
+  - Use a normal top-level "where" condition instead when there's no aggregation, or
+    when the filter is meant to exclude whole parent rows (not just scope a sum/count).
+
 AGGREGATION:
   - Use "aggregate": [{ "fn": "count"|"sum"|"avg"|"min"|"max", "col": "COLUMN or assocAlias.COLUMN or *", "as": "alias" }]
     when the question asks "how many", "total", "average", "highest", "lowest", or similar.

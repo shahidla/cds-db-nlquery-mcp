@@ -13,13 +13,50 @@ function colRef(colStr) {
   return { ref: colStr.split('.') };
 }
 
+// A "column spec" anywhere in a descriptor (select entry, where col/valCol,
+// aggregate.col, having.col) is either a plain dotted-path string, or a structured
+// filtered-association form: { col: 'AMOUNT', viaFiltered: { assoc, where } } —
+// "AMOUNT of this entity's OPEN payments", filtering the join itself rather than
+// the outer row. Confirmed CQN shape against cds.parse.expr("payments[STATUS='OPEN'].AMOUNT"):
+// { ref: [{ id: 'payments', where: [...] }, 'AMOUNT'] }.
+function isFilteredSpec(spec) {
+  return typeof spec === 'object' && spec !== null && spec.viaFiltered != null;
+}
+
+// The dotted-path-string equivalent of a column spec, used wherever paths are
+// treated as plain strings (entity-allowlist walking, column blocklist matching).
+function specPath(spec) {
+  return isFilteredSpec(spec) ? `${spec.viaFiltered.assoc}.${spec.col}` : spec;
+}
+
+// Resolves a column spec into its actual CQN ref, attaching the inline filter to
+// the join hop for the structured form.
+function resolveColSpec(spec) {
+  if (!isFilteredSpec(spec)) return colRef(spec);
+
+  const { assoc, where } = spec.viaFiltered;
+  // Known CQL limitation: paths inside a viaFiltered filter are not supported —
+  // the filter can only reference the filtered association's own direct columns.
+  for (const col of collectWhereCols(where)) {
+    if (col.includes('.')) {
+      throw new Error(
+        `viaFiltered filter column "${col}" on "${assoc}" must be a plain column — ` +
+        `paths inside a viaFiltered filter are not supported by CQL.`
+      );
+    }
+  }
+  const innerWhere = buildWhereExpr(where);
+  const hop = innerWhere ? { id: assoc, where: innerWhere } : assoc;
+  return { ref: [hop, spec.col] };
+}
+
 // CQN function-call column, e.g. count(LOAN_ID) as loan_count — official CQN shape
 // per CAP's own reference: a function-call node is { func: String, args: expr[] }.
 function buildAggregateCol({ fn, col, as }) {
   return {
     func: fn,
-    args: col === '*' ? [{ val: 1 }] : [colRef(col)],
-    as:   as || `${fn}_${col === '*' ? 'all' : col.split('.').pop()}`,
+    args: col === '*' ? [{ val: 1 }] : [resolveColSpec(col)],
+    as:   as || `${fn}_${col === '*' ? 'all' : specPath(col).split('.').pop()}`,
   };
 }
 
@@ -50,11 +87,11 @@ function collectJoinedEntities(paths, startEntityDef, schema) {
 // e.g. [ref, '=', {val}], or a multi-token 'and' pair for within_days/days_ago.
 function buildLeafTokens({ col, op, val, valCol }) {
   const today = new Date();
-  const ref = colRef(col);
+  const ref = resolveColSpec(col);
   // valCol compares against another column instead of a literal (e.g. comparing
   // collateral.VALUE against AMOUNT on the same query) — CDS resolves it as a
   // normal path ref, generating a join the same way the main column would.
-  const rhs = valCol ? colRef(valCol) : { val };
+  const rhs = valCol ? resolveColSpec(valCol) : { val };
 
   switch (op) {
     case 'within_days': {
@@ -172,7 +209,7 @@ function collectWhereCols(conditions) {
     if (node.any) return collectWhereCols(node.any);
     if (node.all) return collectWhereCols(node.all);
     if (node.exists || node.notExists) return [];
-    return node.valCol ? [node.col, node.valCol] : [node.col];
+    return node.valCol ? [specPath(node.col), specPath(node.valCol)] : [specPath(node.col)];
   });
 }
 
@@ -286,6 +323,13 @@ function buildExpandCols(expandList, parentEntityDef, schema, allBlocked, maxExp
  *   select    — columns, supports paths: ['PARTNER', 'customer.BU_SORT1', 'customer.dti.DTI_RATIO']
  *   where     — [{ col, op, val }]; col may be 'assoc.COL' for cross-entity conditions
  *   aggregate — [{ fn: 'count'|'sum'|'avg'|'min'|'max', col: 'COLUMN or assocAlias.COLUMN or *', as }]
+ *
+ *   Anywhere a "col"/"valCol" path is accepted in select/where/aggregate/having (NOT
+ *   groupBy/orderBy), it may instead be a structured filtered-association form:
+ *     { col: 'AMOUNT', viaFiltered: { assoc: 'payments', where: [{ col, op, val }] } }
+ *   — applies the filter INSIDE the join to that association (e.g. "total of OPEN
+ *   payments per loan"), not as a top-level WHERE. viaFiltered.where columns must be
+ *   plain columns of the filtered association's own target entity (no further paths).
  *   groupBy   — ['COLUMN or assocAlias.COLUMN', ...]
  *   having    — [{ fn, col, op, val }] — filters on an aggregate value (e.g. count(LOAN_ID) > 5)
  *   search    — free-text term matched against the entity's @cds.search columns (AND-ed
@@ -344,19 +388,27 @@ async function executeDescriptor(descriptor, schema, callConfig = {}) {
 
   if (expand?.length) validateExpandNesting(expand, entityDef, schema, false);
 
+  // groupBy/orderBy are passed to cds.ql's builder as plain path strings — it does
+  // not accept a structured ref there, so viaFiltered (only meaningful as a value
+  // being selected/aggregated/compared, not as a grouping/sort key) is rejected here
+  // with a clear error instead of producing a broken query.
+  if ((groupBy || []).some(isFilteredSpec) || isFilteredSpec(orderBy)) {
+    throw new Error('viaFiltered is not supported in "groupBy" or "orderBy" — only in "select", "where", "aggregate", and "having".');
+  }
+
   // Enforce the allowlist on entities reached via association-path joins too —
   // e.g. querying "BCA_DTI" but selecting "customer.BU_SORT1" reads BusinessPartners,
   // which must independently pass the same allowlist check as the top-level entity.
   const allPaths = [
-    ...(select || []),
+    ...(select || []).map(specPath),
     ...collectWhereCols(where),
     // Append a dummy trailing segment so collectJoinedEntities (which treats the
     // last path segment as the leaf column) resolves every alias hop, including
     // the exists/notExists target itself, not just the hops before it.
     ...collectExistsPaths(where).map(p => `${p}.__exists_target__`),
-    ...(aggregate || []).filter(a => a.col !== '*').map(a => a.col),
+    ...(aggregate || []).filter(a => a.col !== '*').map(a => specPath(a.col)),
     ...(groupBy || []),
-    ...(having || []).filter(h => h.col !== '*').map(h => h.col),
+    ...(having || []).filter(h => h.col !== '*').map(h => specPath(h.col)),
     ...(orderBy ? [orderBy] : []),
   ];
   const joinedEntities = collectJoinedEntities(allPaths, entityDef, schema);
@@ -400,8 +452,8 @@ async function executeDescriptor(descriptor, schema, callConfig = {}) {
     // behavior below) — q.columns() must be called explicitly once any nested
     // expand column is added, so there's no implicit "SELECT *" fallback here.
     const effectiveSelect = select?.length ? select : (aggregate?.length ? [] : Object.keys(entityDef.columns));
-    const filteredSelect = effectiveSelect.filter(c => !allBlocked.has(c.split('.').pop()));
-    const filteredAggregate = (aggregate || []).filter(a => a.col === '*' || !allBlocked.has(a.col.split('.').pop()));
+    const filteredSelect = effectiveSelect.filter(c => !allBlocked.has(specPath(c).split('.').pop()));
+    const filteredAggregate = (aggregate || []).filter(a => a.col === '*' || !allBlocked.has(specPath(a.col).split('.').pop()));
 
     // The LLM is told (rule 7) never to select the same leaf column name twice
     // (e.g. "CURRENCY" via the top-level entity AND via "loan.CURRENCY"), but a
@@ -411,16 +463,17 @@ async function executeDescriptor(descriptor, schema, callConfig = {}) {
     // selected column, so the query is always valid regardless of what the LLM did.
     const leafCounts = {};
     for (const c of filteredSelect) {
-      const leaf = c.split('.').pop();
+      const leaf = specPath(c).split('.').pop();
       leafCounts[leaf] = (leafCounts[leaf] || 0) + 1;
     }
     const selectCols = filteredSelect.map(c => {
-      const parts = c.split('.');
+      const parts = specPath(c).split('.');
       const leaf = parts[parts.length - 1];
-      if (leafCounts[leaf] > 1 && parts.length > 1) {
+      if (leafCounts[leaf] > 1 && parts.length > 1 && !isFilteredSpec(c)) {
         return { ref: parts, as: parts.join('_') };
       }
-      return colRef(c);
+      const ref = resolveColSpec(c);
+      return leafCounts[leaf] > 1 ? { ...ref, as: parts.join('_') } : ref;
     });
     const aggregateCols = filteredAggregate.map(buildAggregateCol);
     const expandCols = expand?.length

@@ -472,3 +472,115 @@ test('expand on an unknown association throws a clear error', async () => {
     /Unknown association "doesNotExist"/
   );
 });
+
+test('viaFiltered in aggregate.col attaches the filter to the join hop, not a top-level WHERE', async () => {
+  const capture = captureQuery();
+  try {
+    await executeDescriptor(
+      {
+        entity: 'Orders', select: ['ID'],
+        aggregate: [{
+          fn: 'sum',
+          col: { col: 'QTY', viaFiltered: { assoc: 'items', where: [{ col: 'PRODUCT', op: '=', val: 'X' }] } },
+          as: 'qty_for_x',
+        }],
+        groupBy: ['ID'],
+      },
+      schema, {}
+    );
+    const sumCol = capture.get().SELECT.columns.find(c => c.func === 'sum');
+    const hop = sumCol.args[0].ref[0];
+    assert.equal(hop.id, 'items');
+    assert.deepEqual(hop.where, [{ ref: ['PRODUCT'] }, '=', { val: 'X' }]);
+    assert.equal(sumCol.args[0].ref[1], 'QTY');
+    assert.ok(!capture.get().SELECT.where, 'the filter must not appear as a top-level WHERE');
+  } finally {
+    capture.restore();
+  }
+});
+
+test('viaFiltered in select attaches the filter to the join hop', async () => {
+  const capture = captureQuery();
+  try {
+    await executeDescriptor(
+      {
+        entity: 'Orders',
+        select: ['ID', { col: 'QTY', viaFiltered: { assoc: 'items', where: [{ col: 'PRODUCT', op: '=', val: 'X' }] } }],
+      },
+      schema, {}
+    );
+    const cols = capture.get().SELECT.columns;
+    const filteredCol = cols.find(c => c.ref?.[0]?.id === 'items');
+    assert.ok(filteredCol, 'filtered select column must be present');
+    assert.equal(filteredCol.ref[1], 'QTY');
+  } finally {
+    capture.restore();
+  }
+});
+
+test('viaFiltered rejects a path-valued column inside its own filter', async () => {
+  await assert.rejects(
+    () => executeDescriptor(
+      {
+        entity: 'Orders', select: ['ID'],
+        aggregate: [{
+          fn: 'sum',
+          col: { col: 'QTY', viaFiltered: { assoc: 'items', where: [{ col: 'productRef.NAME', op: '=', val: 'X' }] } },
+        }],
+      },
+      schema, {}
+    ),
+    /paths inside a viaFiltered filter are not supported/
+  );
+});
+
+test('viaFiltered association target is enforced by the allowlist', async () => {
+  await assert.rejects(
+    () => executeDescriptor(
+      {
+        entity: 'Orders', select: ['ID'],
+        aggregate: [{
+          fn: 'sum',
+          col: { col: 'QTY', viaFiltered: { assoc: 'items', where: [{ col: 'PRODUCT', op: '=', val: 'X' }] } },
+        }],
+      },
+      schema,
+      { allowedEntities: ['Orders'] } // Items deliberately excluded
+    ),
+    /reached via association join/
+  );
+});
+
+test('viaFiltered column blocked via blockedColumns is stripped from select', async () => {
+  const capture = captureQuery();
+  try {
+    await executeDescriptor(
+      {
+        entity: 'Orders',
+        select: ['ID', { col: 'SECRET', viaFiltered: { assoc: 'items', where: [{ col: 'PRODUCT', op: '=', val: 'X' }] } }],
+      },
+      schema, { blockedColumns: ['SECRET'] }
+    );
+    const cols = capture.get().SELECT.columns;
+    assert.ok(!cols.some(c => c.ref?.[0]?.id === 'items'), 'blocked viaFiltered column must not reach SQL');
+  } finally {
+    capture.restore();
+  }
+});
+
+test('viaFiltered is rejected in groupBy and orderBy', async () => {
+  await assert.rejects(
+    () => executeDescriptor(
+      { entity: 'Orders', groupBy: [{ col: 'QTY', viaFiltered: { assoc: 'items', where: [] } }] },
+      schema, {}
+    ),
+    /viaFiltered is not supported in "groupBy" or "orderBy"/
+  );
+  await assert.rejects(
+    () => executeDescriptor(
+      { entity: 'Orders', orderBy: { col: 'QTY', viaFiltered: { assoc: 'items', where: [] } } },
+      schema, {}
+    ),
+    /viaFiltered is not supported in "groupBy" or "orderBy"/
+  );
+});
