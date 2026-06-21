@@ -80,6 +80,9 @@ function buildSchema(cdsModel) {
   for (const [fqn, def] of Object.entries(cdsModel.definitions)) {
     if (def.kind !== 'entity') continue;
     if (fqn.startsWith('sap.') || fqn.startsWith('DRAFT.')) continue;
+    // No backing db table/view — querying it via cds.run() would fail or behave
+    // unexpectedly, so it must never be offered to the LLM as a queryable entity.
+    if (def['@cds.persistence.skip'] === true || def['@cds.persistence.skip'] === 'true') continue;
 
     const columns = {};
     const joins   = {};

@@ -142,6 +142,19 @@ test('buildSchemaPrompt renders description and synonyms as text', () => {
   assert.match(prompt, /aka: DTI ratio/);
 });
 
+test('entities marked @cds.persistence.skip are excluded from the schema', () => {
+  const csn = linkedModel({
+    'app.Customers': { kind: 'entity', elements: { ID: { type: 'cds.String', key: true } } },
+    'app.ApiOnlyView': {
+      kind: 'entity',
+      '@cds.persistence.skip': true,
+      elements: { ID: { type: 'cds.String', key: true } },
+    },
+  });
+  const schema = buildSchema(csn);
+  assert.deepEqual(Object.keys(schema), ['Customers']);
+});
+
 test('colliding short names fall back to fully-qualified keys', () => {
   const csn = linkedModel({
     'sales.Order':   { kind: 'entity', elements: { ID: { type: 'cds.String', key: true } } },
