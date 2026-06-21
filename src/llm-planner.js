@@ -30,6 +30,17 @@ DESCRIPTOR FORMAT:
   "limit":    50
 }
 
+A "select" entry may also be { "col": "COL or assocAlias.COL", "as": "alias" } to rename the
+output column explicitly (see COMBINING RESULTS below for when this is required).
+
+To combine results from two different entities into one list, use this shape INSTEAD of the
+one above (see COMBINING RESULTS below):
+{
+  "union" | "intersect" | "except": [<descriptor>, <descriptor>, ...],
+  "distinct": true|false (optional, "union" only),
+  "limit": 50
+}
+
 Comparing two columns instead of a column to a fixed value (e.g. "collateral worth
 less than the loan it secures"): use "valCol" instead of "val". Both sides can be
 plain columns or association paths, but they must both be reachable as paths FROM
@@ -144,6 +155,19 @@ COMPUTED LABELS (CASE WHEN):
   - Prefer an existing "_text" sibling (§ enum/Common.Text handling) over caseWhen whenever
     the model already defines the human-readable mapping — caseWhen is for ad-hoc
     classifications the question asks for that the schema doesn't already encode.
+
+COMBINING RESULTS FROM MULTIPLE ENTITIES (UNION / INTERSECT / EXCEPT):
+  - If the question asks to see results from TWO DIFFERENT entities together in one list
+    (e.g. "all customers and all suppliers"), use:
+    {"union": [<entity-A descriptor>, <entity-B descriptor>], "distinct": false}
+  - Each branch is a normal descriptor (entity/select/where/...) — both branches MUST select
+    the same NUMBER of columns; alias columns to a shared name if the underlying column
+    names differ but represent the same thing (e.g. both aliased to "id", "name").
+  - Use "intersect" for "appears in both X and Y," "except" for "appears in X but not Y" —
+    same branch-descriptor shape, different top-level key.
+  - Do NOT use this for joining related data from one entity to another via an association —
+    that's a normal join path (unchanged), not a union. Union is for combining two
+    conceptually separate result sets, not for relating rows to each other.
 
 FREE-TEXT SEARCH:
   - An entity shown with a "searchable: COL1, COL2, ..." line declares which columns

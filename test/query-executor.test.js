@@ -1051,3 +1051,200 @@ test('caseWhen columns can coexist with plain "select" columns', async () => {
     capture.restore();
   }
 });
+
+test('select entry { col, as } renames the output column explicitly', async () => {
+  const capture = captureQuery();
+  try {
+    await executeDescriptor(
+      { entity: 'Orders', select: [{ col: 'ID', as: 'id' }, 'AMOUNT'] },
+      schema, {}
+    );
+    const cols = capture.get().SELECT.columns;
+    assert.deepEqual(cols.find(c => c.as === 'id'), { ref: ['ID'], as: 'id' });
+    assert.ok(cols.some(c => c.ref?.join('.') === 'AMOUNT'));
+  } finally {
+    capture.restore();
+  }
+});
+
+test('union: concatenates rows from both branches (UNION ALL semantics by default)', async () => {
+  const mock = mockRunSequence([
+    [{ id: 'O1' }, { id: 'O2' }],
+    [{ id: 'C1' }],
+  ]);
+  try {
+    const rows = await executeDescriptor(
+      {
+        union: [
+          { entity: 'Orders', select: [{ col: 'ID', as: 'id' }] },
+          { entity: 'Customers', select: [{ col: 'ID', as: 'id' }] },
+        ],
+      },
+      schema, {}
+    );
+    assert.deepEqual(rows, [{ id: 'O1' }, { id: 'O2' }, { id: 'C1' }]);
+    assert.equal(mock.calls.length, 2);
+  } finally {
+    mock.restore();
+  }
+});
+
+test('union: distinct:true dedupes identical rows across branches', async () => {
+  const mock = mockRunSequence([
+    [{ id: 'X' }, { id: 'Y' }],
+    [{ id: 'X' }],
+  ]);
+  try {
+    const rows = await executeDescriptor(
+      {
+        union: [
+          { entity: 'Orders', select: [{ col: 'ID', as: 'id' }] },
+          { entity: 'Customers', select: [{ col: 'ID', as: 'id' }] },
+        ],
+        distinct: true,
+      },
+      schema, {}
+    );
+    assert.deepEqual(rows, [{ id: 'X' }, { id: 'Y' }]);
+  } finally {
+    mock.restore();
+  }
+});
+
+test('intersect: returns only rows present in every branch', async () => {
+  const mock = mockRunSequence([
+    [{ id: 'X' }, { id: 'Y' }, { id: 'Z' }],
+    [{ id: 'Y' }, { id: 'Z' }],
+  ]);
+  try {
+    const rows = await executeDescriptor(
+      {
+        intersect: [
+          { entity: 'Orders', select: [{ col: 'ID', as: 'id' }] },
+          { entity: 'Customers', select: [{ col: 'ID', as: 'id' }] },
+        ],
+      },
+      schema, {}
+    );
+    assert.deepEqual(rows, [{ id: 'Y' }, { id: 'Z' }]);
+  } finally {
+    mock.restore();
+  }
+});
+
+test('except: returns rows in the first branch absent from every other branch', async () => {
+  const mock = mockRunSequence([
+    [{ id: 'X' }, { id: 'Y' }, { id: 'Z' }],
+    [{ id: 'Y' }],
+  ]);
+  try {
+    const rows = await executeDescriptor(
+      {
+        except: [
+          { entity: 'Orders', select: [{ col: 'ID', as: 'id' }] },
+          { entity: 'Customers', select: [{ col: 'ID', as: 'id' }] },
+        ],
+      },
+      schema, {}
+    );
+    assert.deepEqual(rows, [{ id: 'X' }, { id: 'Z' }]);
+  } finally {
+    mock.restore();
+  }
+});
+
+test('union: requires at least 2 branches', async () => {
+  await assert.rejects(
+    () => executeDescriptor({ union: [{ entity: 'Orders', select: ['ID'] }] }, schema, {}),
+    /requires an array of at least 2 branch descriptors/
+  );
+});
+
+test('union: branches must select the same number of columns', async () => {
+  await assert.rejects(
+    () => executeDescriptor(
+      {
+        union: [
+          { entity: 'Orders', select: ['ID', 'AMOUNT'] },
+          { entity: 'Customers', select: ['ID'] },
+        ],
+      },
+      schema, {}
+    ),
+    /branches must all select the same number of columns/
+  );
+});
+
+test('union: cannot be combined with top-level entity/select', async () => {
+  await assert.rejects(
+    () => executeDescriptor(
+      {
+        entity: 'Orders',
+        union: [
+          { entity: 'Orders', select: ['ID'] },
+          { entity: 'Customers', select: ['ID'] },
+        ],
+      },
+      schema, {}
+    ),
+    /cannot be combined with top-level "entity"/
+  );
+});
+
+test('union/intersect/except: only one set-op key may be used at a time', async () => {
+  await assert.rejects(
+    () => executeDescriptor(
+      {
+        union: [{ entity: 'Orders', select: ['ID'] }, { entity: 'Customers', select: ['ID'] }],
+        intersect: [{ entity: 'Orders', select: ['ID'] }, { entity: 'Customers', select: ['ID'] }],
+      },
+      schema, {}
+    ),
+    /can only use one of "union", "intersect", or "except"/
+  );
+});
+
+test('union: combined result respects "limit", and each branch is capped before combining', async () => {
+  const mock = mockRunSequence([
+    [{ id: 'O1' }, { id: 'O2' }, { id: 'O3' }],
+    [{ id: 'C1' }, { id: 'C2' }, { id: 'C3' }],
+  ]);
+  try {
+    const rows = await executeDescriptor(
+      {
+        union: [
+          { entity: 'Orders', select: [{ col: 'ID', as: 'id' }] },
+          { entity: 'Customers', select: [{ col: 'ID', as: 'id' }] },
+        ],
+        limit: 4,
+      },
+      schema, {}
+    );
+    assert.equal(rows.length, 4);
+    const branchLimits = mock.calls.map(q => q.SELECT.limit.rows.val);
+    assert.deepEqual(branchLimits, [4, 4]);
+  } finally {
+    mock.restore();
+  }
+});
+
+test('union/intersect/except: respects per-call entity allowlist on each branch', async () => {
+  const capture = captureQuery();
+  try {
+    await assert.rejects(
+      () => executeDescriptor(
+        {
+          union: [
+            { entity: 'Orders', select: ['ID'] },
+            { entity: 'Customers', select: ['ID'] },
+          ],
+        },
+        schema,
+        { allowedEntities: ['Orders'] }
+      ),
+      /not in the per-call allowed_entities list/
+    );
+  } finally {
+    capture.restore();
+  }
+});

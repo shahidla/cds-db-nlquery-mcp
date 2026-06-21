@@ -23,15 +23,29 @@ function isFilteredSpec(spec) {
   return typeof spec === 'object' && spec !== null && spec.viaFiltered != null;
 }
 
+// A select-entry spec may also be a plain explicit-alias form { col: 'AMOUNT', as: 'total' } —
+// no filtered join, just a rename. Useful on its own, and required by "union"/"intersect"/
+// "except" branches whose underlying columns are named differently but represent the same thing.
+function isObjSpec(spec) {
+  return typeof spec === 'object' && spec !== null && spec.col != null;
+}
+
+// The explicit "as" alias of a select-entry spec, if any (only the { col, as } form carries one).
+function specAlias(spec) {
+  return isObjSpec(spec) ? spec.as : undefined;
+}
+
 // The dotted-path-string equivalent of a column spec, used wherever paths are
 // treated as plain strings (entity-allowlist walking, column blocklist matching).
 function specPath(spec) {
-  return isFilteredSpec(spec) ? `${spec.viaFiltered.assoc}.${spec.col}` : spec;
+  if (isFilteredSpec(spec)) return `${spec.viaFiltered.assoc}.${spec.col}`;
+  return isObjSpec(spec) ? spec.col : spec;
 }
 
 // Resolves a column spec into its actual CQN ref, attaching the inline filter to
 // the join hop for the structured form.
 function resolveColSpec(spec) {
+  if (isObjSpec(spec) && !isFilteredSpec(spec)) return colRef(spec.col);
   if (!isFilteredSpec(spec)) return colRef(spec);
 
   const { assoc, where } = spec.viaFiltered;
@@ -501,7 +515,10 @@ async function executeHierarchy(hierarchy, entityDef, schema, select, allBlocked
  *
  * Descriptor shape:
  *   entity    — entity short name (must be in schema)
- *   select    — columns, supports paths: ['PARTNER', 'customer.BU_SORT1', 'customer.dti.DTI_RATIO']
+ *   select    — columns, supports paths: ['PARTNER', 'customer.BU_SORT1', 'customer.dti.DTI_RATIO'].
+ *               A select entry may also be { col: 'PARTNER', as: 'id' } to rename the output
+ *               column explicitly — useful on its own, and required by "union"/"intersect"/
+ *               "except" branches whose underlying column names differ but mean the same thing.
  *   where     — [{ col, op, val }]; col may be 'assoc.COL' for cross-entity conditions
  *   aggregate — [{ fn: 'count'|'sum'|'avg'|'min'|'max', col: 'COLUMN or assocAlias.COLUMN or *', as }]
  *
@@ -542,12 +559,28 @@ async function executeHierarchy(hierarchy, entityDef, schema, select, allBlocked
  *   limit     — rows requested (capped by server maxRows, enforced at SQL LIMIT)
  *   offset    — rows to skip for pagination (capped by server maxOffset, default 0)
  *
+ * Alternatively, a top-level "union"/"intersect"/"except" array of ORDINARY branch
+ * descriptors (each one is everything above, recursively) combines independently-run
+ * result sets in plain JS — mutually exclusive with entity/select/where/etc. at the top
+ * level, and with each other (only one of the three set-ops per descriptor):
+ *   union     — [<descriptor>, <descriptor>, ...] (2+) — concatenates branch results.
+ *               "distinct": true|false (default false) controls UNION vs UNION ALL semantics.
+ *   intersect — same shape — rows present in EVERY branch (deduped, like real INTERSECT).
+ *   except    — same shape — rows in the FIRST branch absent from every other branch.
+ *   Every branch must resolve to the same number of output columns (validated up front);
+ *   alias columns with select's { col, as } form if the underlying names differ.
+ *   "limit" still applies (to the combined result); each branch is independently capped
+ *   to that same limit before combining so one branch can't return unbounded rows.
+ *
  * callConfig (per-call input param overrides — merged with server config):
  *   allowedEntities — restrict queryable entities for this call (intersects with server list)
  *   blockedColumns  — additional columns to strip for this call (unions with server list)
  *   maxRows         — lower the row cap for this call
  */
 async function executeDescriptor(descriptor, schema, callConfig = {}) {
+  const setOp = SET_OPS.find(op => descriptor[op] !== undefined);
+  if (setOp) return executeSetOp(setOp, descriptor, schema, callConfig);
+
   const {
     entity,
     select,
@@ -702,6 +735,9 @@ async function executeDescriptor(descriptor, schema, callConfig = {}) {
       leafCounts[leaf] = (leafCounts[leaf] || 0) + 1;
     }
     const selectCols = filteredSelect.map(c => {
+      const explicitAlias = specAlias(c);
+      if (explicitAlias) return { ...resolveColSpec(c), as: explicitAlias };
+
       const parts = specPath(c).split('.');
       const leaf = parts[parts.length - 1];
       if (leafCounts[leaf] > 1 && parts.length > 1 && !isFilteredSpec(c)) {
@@ -797,6 +833,122 @@ async function executeDescriptor(descriptor, schema, callConfig = {}) {
   }
 
   return rows;
+}
+
+const SET_OPS = ['union', 'intersect', 'except'];
+
+// Canonical row key for set-logic comparisons — sorts keys so two rows produced
+// by differently-ordered branch selects (but the same logical column names, e.g.
+// via "as" aliasing) still compare equal.
+function rowKey(row) {
+  return JSON.stringify(Object.keys(row).sort().map(k => row[k]));
+}
+
+function dedupeRows(rows) {
+  const seen = new Set();
+  const out = [];
+  for (const row of rows) {
+    const key = rowKey(row);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(row);
+  }
+  return out;
+}
+
+// Standard SQL INTERSECT/EXCEPT semantics: compare the first branch's rows against
+// every other branch's row keys, and (like real INTERSECT/EXCEPT, which imply DISTINCT)
+// dedupe the first branch's own rows too.
+function combineSetOp(setOp, branchResults) {
+  const [first, ...rest] = branchResults;
+  const restKeySets = rest.map(rows => new Set(rows.map(rowKey)));
+  const seen = new Set();
+  const out = [];
+  for (const row of first) {
+    const key = rowKey(row);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    const matches = setOp === 'intersect'
+      ? restKeySets.every(s => s.has(key))
+      : restKeySets.every(s => !s.has(key));
+    if (matches) out.push(row);
+  }
+  return out;
+}
+
+// Counts how many output columns a branch descriptor would resolve to, WITHOUT
+// running it — mirrors executeDescriptor's own "cols?.length" condition and column-
+// list assembly (select/aggregate/expand/window/caseWhen all contribute columns)
+// closely enough to catch a column-count mismatch up front with a clear error,
+// instead of letting it surface later as a confusing partial/misaligned result.
+// Returns null for an unknown entity — executeDescriptor's own per-branch call
+// will raise the real "Unknown entity" error for that case.
+function countBranchColumns(branchDescriptor, schema) {
+  const { entity, select, aggregate, expand, window: windowList, caseWhen } = branchDescriptor;
+  const entityDef = schema[entity];
+  if (!entityDef) return null;
+  if (select?.length || aggregate?.length || expand?.length || windowList?.length || caseWhen?.length) {
+    const selectCount = select?.length ? select.length : (aggregate?.length ? 0 : Object.keys(entityDef.columns).length);
+    return selectCount + (aggregate?.length || 0) + (expand?.length || 0) + (windowList?.length || 0) + (caseWhen?.length || 0);
+  }
+  return Object.keys(entityDef.columns).length;
+}
+
+const NORMAL_DESCRIPTOR_KEYS = [
+  'entity', 'select', 'where', 'aggregate', 'groupBy', 'having', 'search', 'expand',
+  'hierarchy', 'window', 'windowFilter', 'caseWhen', 'orderBy', 'orderDir',
+];
+
+// Executes a "union"/"intersect"/"except" descriptor: each branch is an ordinary,
+// already-supported descriptor, run through the existing, unmodified executeDescriptor()
+// — every existing security check (entity allowlist, column blocklist, row cap) already
+// applies per-branch with zero new code. Combining is then plain JS array/Set logic, never
+// new SQL — confirmed lowest-risk per the extension plan, since this package already
+// reduces every descriptor down to a plain row array before this point.
+async function executeSetOp(setOp, descriptor, schema, callConfig) {
+  const branches = descriptor[setOp];
+  if (!Array.isArray(branches) || branches.length < 2) {
+    throw new Error(`"${setOp}" requires an array of at least 2 branch descriptors.`);
+  }
+  for (const op of SET_OPS) {
+    if (op !== setOp && descriptor[op] !== undefined) {
+      throw new Error('A descriptor can only use one of "union", "intersect", or "except" at a time.');
+    }
+  }
+  for (const key of NORMAL_DESCRIPTOR_KEYS) {
+    if (descriptor[key] !== undefined) {
+      throw new Error(`"${setOp}" cannot be combined with top-level "${key}" — each branch is its own descriptor.`);
+    }
+  }
+
+  const serverCfg = require('./config');
+  const callMax = callConfig.maxRows || Infinity;
+  const effectiveLimit = Math.min(descriptor.limit ?? 50, serverCfg.maxRows, callMax);
+
+  const counts = branches.map(b => countBranchColumns(b, schema));
+  if (counts.every(c => c != null) && new Set(counts).size > 1) {
+    throw new Error(
+      `"${setOp}" branches must all select the same number of columns (got: ${counts.join(', ')}). ` +
+      `Alias columns to a shared name with { "col": "...", "as": "..." } if the underlying column names differ.`
+    );
+  }
+
+  const branchResults = [];
+  for (const branch of branches) {
+    const branchConfig = { ...callConfig, maxRows: effectiveLimit };
+    const branchLimit = Math.min(branch.limit ?? effectiveLimit, effectiveLimit);
+    branchResults.push(await executeDescriptor({ ...branch, limit: branchLimit }, schema, branchConfig));
+  }
+
+  let rows;
+  if (setOp === 'union') {
+    rows = branchResults.flat();
+    if (descriptor.distinct) rows = dedupeRows(rows);
+  } else {
+    rows = combineSetOp(setOp, branchResults);
+  }
+
+  return rows.slice(0, effectiveLimit);
 }
 
 module.exports = { executeDescriptor };
