@@ -120,6 +120,14 @@ function buildSchema(cdsModel) {
           meta.synonyms = col['@NLP.synonyms'];
         }
 
+        // @assert.range is normally a write-time validation annotation, but as
+        // read-only metadata it's a useful hint of the column's valid domain — lets
+        // the LLM catch an out-of-range filter (e.g. unit/scale mismatch) before
+        // emitting a query that trivially returns zero rows.
+        if (col['@assert.range']) {
+          meta.range = col['@assert.range'];
+        }
+
         // Native CDS enum (e.g. `STATUS : String(1) enum { active = 'A'; closed = 'C'; }`)
         // — the same SAP-standard mechanism Fiori uses for value help / coded dropdowns.
         // Captured as { rawValue: symbolicName } so the LLM knows both the business term
@@ -177,6 +185,7 @@ function buildSchemaPrompt(schema) {
         if (meta.label) s += `["${meta.label}"]`;
         if (meta.description) s += ` — ${meta.description}`;
         if (meta.synonyms) s += ` (aka: ${meta.synonyms.join(', ')})`;
+        if (meta.range) s += `[${meta.range[0]}..${meta.range[1]}]`;
         if (meta.enum) {
           const pairs = Object.entries(meta.enum).map(([val, name]) => `${name}="${val}"`).join(',');
           s += `{values: ${pairs} — use the raw value in filters}`;

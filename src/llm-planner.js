@@ -42,6 +42,12 @@ JOINS — use association path expressions, no "join" field needed:
   - Multiple associations can be used in the same query (e.g. customer.BU_SORT1 and payments.DAYS_OVERDUE)
   - CDS generates optimised SQL JOINs from these paths — HANA handles multi-table joins at scale
 
+RANGE HINTS:
+  - A column shown as "COL:Type[min..max]" has a known valid domain. If the question implies
+    a filter value outside that range, it's more likely the question used a different unit/
+    scale than that the data is wrong — double check the column choice and value before
+    emitting the filter (e.g. a percentage 0-1 vs 0-100 mismatch).
+
 AGGREGATION:
   - Use "aggregate": [{ "fn": "count"|"sum"|"avg"|"min"|"max", "col": "COLUMN or assocAlias.COLUMN or *", "as": "alias" }]
     when the question asks "how many", "total", "average", "highest", "lowest", or similar.

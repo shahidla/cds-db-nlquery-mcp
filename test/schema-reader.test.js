@@ -155,6 +155,22 @@ test('entities marked @cds.persistence.skip are excluded from the schema', () =>
   assert.deepEqual(Object.keys(schema), ['Customers']);
 });
 
+test('@assert.range is captured and rendered as [min..max]', () => {
+  const csn = linkedModel({
+    'app.Loans': {
+      kind: 'entity',
+      elements: {
+        ID:  { type: 'cds.String', key: true },
+        DTI: { type: 'cds.Decimal', '@assert.range': [0, 50] },
+      },
+    },
+  });
+  const schema = buildSchema(csn);
+  assert.deepEqual(schema.Loans.columns.DTI.range, [0, 50]);
+  const prompt = buildSchemaPrompt(schema);
+  assert.match(prompt, /DTI:Decimal\[0\.\.50\]/);
+});
+
 test('colliding short names fall back to fully-qualified keys', () => {
   const csn = linkedModel({
     'sales.Order':   { kind: 'entity', elements: { ID: { type: 'cds.String', key: true } } },
