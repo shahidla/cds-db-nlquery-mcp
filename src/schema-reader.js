@@ -21,6 +21,24 @@ function mapType(cdsType) {
   return CDS_TYPE_MAP[cdsType] || 'String';
 }
 
+// CDS's real compiler flattens a dictionary-valued annotation (e.g.
+// `@cds.search: {NAME, NOTES}` or `@Common.ValueList: {CollectionPath, Parameters}`)
+// into dotted-path keys on the definition/element — `@cds.search.NAME`,
+// `@Common.ValueList.CollectionPath` — rather than leaving a nested object at
+// `def['@cds.search']`. (Confirmed against a real cds.load()/cds.linked() compile;
+// hand-built CSN in tests that already nests the object hits the first branch below
+// and needs no change.) Array-valued leaves (e.g. ValueList's Parameters) are kept
+// intact under their own dotted key, not flattened further.
+function getAnnotation(obj, name) {
+  if (obj[name] !== undefined) return obj[name];
+  const prefix = `${name}.`;
+  const keys = Object.keys(obj).filter(k => k.startsWith(prefix));
+  if (!keys.length) return undefined;
+  const result = {};
+  for (const k of keys) result[k.slice(prefix.length)] = obj[k];
+  return result;
+}
+
 // Derives the join key from a CDS association's ON condition or managed keys.
 // CDS stores ON conditions as an array like:
 //   [{ref: ['self', 'PARTNER']}, '=', {ref: ['target', 'PARTNER']}]
@@ -181,8 +199,9 @@ function buildSchema(cdsModel) {
         // simpler @Common.Text 1:1 lookup already handled above). Resolution needs the
         // full `joins` map for this entity, which isn't built yet mid-loop, so stash the
         // raw annotation and resolve it in a second pass below once `joins` is complete.
-        if (!meta.textVia && col['@Common.ValueList']?.CollectionPath) {
-          meta._pendingValueList = col['@Common.ValueList'];
+        const valueList = getAnnotation(col, '@Common.ValueList');
+        if (!meta.textVia && valueList?.CollectionPath) {
+          meta._pendingValueList = valueList;
         }
 
         columns[colName] = meta;
@@ -217,7 +236,7 @@ function buildSchema(cdsModel) {
     // @cds.search declares which columns participate in CAP's built-in free-text
     // search query option — lets the LLM use a single "search" term instead of
     // having to guess which column a vague match term lives in.
-    const searchAnno = def['@cds.search'];
+    const searchAnno = getAnnotation(def, '@cds.search');
     const searchableColumns = searchAnno
       ? Object.keys(searchAnno).filter(k => searchAnno[k] !== false)
       : [];

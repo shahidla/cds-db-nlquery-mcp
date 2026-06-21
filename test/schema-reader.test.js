@@ -438,3 +438,65 @@ test('buildSchemaPrompt renders searchable columns on the entity header', () => 
   const prompt = buildSchemaPrompt(schema);
   assert.match(prompt, /searchable: NAME/);
 });
+
+// The real CDS compiler flattens a dictionary-valued annotation into dotted-path
+// keys (`@cds.search.NAME`, `@cds.search.NOTES`) rather than leaving a nested
+// object at `def['@cds.search']` — confirmed against an actual cds.load()/
+// cds.linked() compile of `@cds.search: {NAME, NOTES}`. The hand-built CSN used
+// elsewhere in this file (already nested) would mask a regression here, so this
+// test reproduces the real compiler's flattened shape directly.
+test('@cds.search is read correctly from the real compiler\'s flattened dotted-key form', () => {
+  const csn = linkedModel({
+    'app.Customers': {
+      kind: 'entity',
+      '@cds.search.NAME': true,
+      '@cds.search.NOTES': true,
+      elements: {
+        ID:    { type: 'cds.String', key: true },
+        NAME:  { type: 'cds.String' },
+        NOTES: { type: 'cds.String' },
+      },
+    },
+  });
+  const schema = buildSchema(csn);
+  assert.deepEqual(schema.Customers.searchableColumns, ['NAME', 'NOTES']);
+});
+
+// Same flattening behavior applies to @Common.ValueList — confirmed against a real
+// compile of `@Common.ValueList: {CollectionPath, Parameters}`, which compiles to
+// `@Common.ValueList.CollectionPath` / `@Common.ValueList.Parameters` (the
+// Parameters array itself is kept intact, not flattened further).
+test('@Common.ValueList is read correctly from the real compiler\'s flattened dotted-key form', () => {
+  const csn = linkedModel({
+    'app.Loans': {
+      kind: 'entity',
+      elements: {
+        ID: { type: 'cds.String', key: true },
+        SECTOR: {
+          type: 'cds.String',
+          '@Common.ValueList.CollectionPath': 'Sectors',
+          '@Common.ValueList.Parameters': [
+            { $Type: 'Common.ValueListParameterInOut', LocalDataProperty: 'SECTOR', ValueListProperty: 'CODE' },
+            { $Type: 'Common.ValueListParameterDisplayOnly', ValueListProperty: 'DESCRIPTION' },
+          ],
+        },
+        sector: {
+          type: 'cds.Association',
+          isAssociation: true,
+          target: 'app.Sectors',
+          cardinality: { max: 1 },
+          on: [{ ref: ['sector', 'CODE'] }, '=', { ref: ['SECTOR'] }],
+        },
+      },
+    },
+    'app.Sectors': {
+      kind: 'entity',
+      elements: {
+        CODE:        { type: 'cds.String', key: true },
+        DESCRIPTION: { type: 'cds.String' },
+      },
+    },
+  });
+  const schema = buildSchema(csn);
+  assert.equal(schema.Loans.columns.SECTOR.textVia, 'sector.DESCRIPTION');
+});
