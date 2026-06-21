@@ -24,6 +24,7 @@ DESCRIPTOR FORMAT:
   "hierarchy": { "assoc": "...", "direction": "descendants"|"ancestors", "startWhere": [...], "maxDepth": N|null } (optional),
   "window":   [{ "fn": "...", "as": "alias", "col": "COL", "partitionBy": [...], "orderBy": [...] }] (optional),
   "windowFilter": [{ "col": "window alias", "op": "...", "val": ... }] (optional),
+  "caseWhen": [{ "as": "alias", "when": [{ "where": [...], "then": "value" }], "else": "value" }] (optional),
   "orderBy":  "COL or assocAlias.COL" or null,
   "orderDir": "ASC" | "DESC",
   "limit":    50
@@ -133,6 +134,16 @@ WINDOW FUNCTIONS (ranking, "top N per group", running totals — different from 
   - Do not use "window" for a simple "top N overall" question (no PARTITION BY implied) —
     that's just "orderBy" + "limit", unchanged.
   - "window" cannot be combined with "aggregate"/"groupBy"/"having"/"expand".
+
+COMPUTED LABELS (CASE WHEN):
+  - Use "caseWhen" to turn a numeric/coded column into a business-readable label inline,
+    e.g. classifying DAYS_OVERDUE into "Healthy"/"Watch"/"Default" bands:
+    {"as": "alias", "when": [{"where": [...], "then": "value"}, ...], "else": "value"}
+  - Branches are evaluated top to bottom; the first matching "where" wins (standard CASE WHEN
+    semantics) — order branches from most specific to least specific.
+  - Prefer an existing "_text" sibling (§ enum/Common.Text handling) over caseWhen whenever
+    the model already defines the human-readable mapping — caseWhen is for ad-hoc
+    classifications the question asks for that the schema doesn't already encode.
 
 FREE-TEXT SEARCH:
   - An entity shown with a "searchable: COL1, COL2, ..." line declares which columns

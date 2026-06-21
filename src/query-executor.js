@@ -122,6 +122,36 @@ function collectWindowCols(windowList) {
   ]);
 }
 
+// CQN shape for a CASE WHEN computed column, e.g.:
+//   case when DAYS_OVERDUE <= 0 then 'Healthy' when DAYS_OVERDUE <= 30 then 'Watch' else 'Default' end
+// confirmed against cds.parse.expr(...) — CQN's xpr escape hatch takes the keywords/branch
+// conditions/values as a flat token array; each branch's condition tokens come from the
+// same buildWhereExpr used for a normal "where" (full any/all/exists support, same column
+// resolution/validation), never assembled from raw LLM strings.
+function buildCaseWhenCol(spec, entityDef, schema) {
+  const { as, when, else: elseVal } = spec;
+  if (!as) throw new Error('"caseWhen" entries require an "as" alias.');
+  if (!when?.length) throw new Error(`"caseWhen" entry "${as}" requires at least one "when" branch.`);
+
+  const tokens = ['case'];
+  for (const branch of when) {
+    const condTokens = buildWhereExpr(branch.where, entityDef, schema);
+    if (!condTokens) throw new Error(`"caseWhen" entry "${as}" has a "when" branch with no "where" conditions.`);
+    if (branch.then === undefined) throw new Error(`"caseWhen" entry "${as}" has a "when" branch with no "then" value.`);
+    tokens.push('when', ...condTokens, 'then', { val: branch.then });
+  }
+  if (elseVal !== undefined) tokens.push('else', { val: elseVal });
+  tokens.push('end');
+
+  return { xpr: tokens, as };
+}
+
+// Collects every column path referenced inside a "caseWhen" array's branch where-conditions —
+// used to extend the entity-allowlist walk the same way every other section does.
+function collectCaseWhenCols(caseWhenList) {
+  return (caseWhenList || []).flatMap(c => (c.when || []).flatMap(branch => collectWhereCols(branch.where)));
+}
+
 function isoDate(d) { return d.toISOString().split('T')[0]; }
 
 // Walks every path string (e.g. 'customer.dti.DTI_RATIO') and resolves every
@@ -504,6 +534,9 @@ async function executeHierarchy(hierarchy, entityDef, schema, select, allBlocked
  *               per group"); a plain top-level "where" cannot reference a window-function
  *               result (standard SQL evaluates WHERE before window functions), so this
  *               wraps the query in a derived-table SELECT instead. Requires "window".
+ *   caseWhen  — [{ as, when: [{ where, then }], else }] — a computed CASE WHEN column;
+ *               "where" uses the same condition shape (incl. any/all/exists) as a normal
+ *               "where" clause; branches are evaluated in order, first match wins.
  *   orderBy   — column or 'assoc.COL'
  *   orderDir  — 'ASC' | 'DESC'
  *   limit     — rows requested (capped by server maxRows, enforced at SQL LIMIT)
@@ -527,6 +560,7 @@ async function executeDescriptor(descriptor, schema, callConfig = {}) {
     hierarchy,
     window: windowList,
     windowFilter,
+    caseWhen,
     orderBy, orderDir,
     limit: rawLimit = 50,
     offset: rawOffset = 0,
@@ -610,6 +644,7 @@ async function executeDescriptor(descriptor, schema, callConfig = {}) {
     ...(having || []).filter(h => h.col !== '*').map(h => specPath(h.col)),
     ...(orderBy ? [orderBy] : []),
     ...collectWindowCols(windowList),
+    ...collectCaseWhenCols(caseWhen),
   ];
   const joinedEntities = collectJoinedEntities(allPaths, entityDef, schema);
   for (const e of collectExpandEntities(expand, entityDef, schema)) joinedEntities.add(e);
@@ -646,7 +681,7 @@ async function executeDescriptor(descriptor, schema, callConfig = {}) {
   // Path refs like { ref: ['customer', 'BU_SORT1'] } → CDS generates a SQL JOIN
 
   let cols = null;
-  if (select?.length || aggregate?.length || expand?.length || windowList?.length) {
+  if (select?.length || aggregate?.length || expand?.length || windowList?.length || caseWhen?.length) {
     // When "expand" is used without an explicit "select", default to all of the
     // parent entity's own columns (mirrors the no-select-no-expand "all columns"
     // behavior below) — q.columns() must be called explicitly once any nested
@@ -680,7 +715,8 @@ async function executeDescriptor(descriptor, schema, callConfig = {}) {
       ? buildExpandCols(expand, entityDef, schema, allBlocked, serverCfg.maxExpandRows)
       : [];
     const windowCols = windowList?.length ? windowList.map(buildWindowCol) : [];
-    cols = [...selectCols, ...aggregateCols, ...expandCols, ...windowCols];
+    const caseWhenCols = caseWhen?.length ? caseWhen.map(c => buildCaseWhenCol(c, entityDef, schema)) : [];
+    cols = [...selectCols, ...aggregateCols, ...expandCols, ...windowCols, ...caseWhenCols];
   } else if (allBlocked.size > 0) {
     // No explicit select ("all columns") but some columns are blocked. Without this,
     // the query would fall through to SELECT * — fetching blocked columns (e.g.

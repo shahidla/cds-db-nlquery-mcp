@@ -876,3 +876,178 @@ test('orderBy applies to the outer query when windowFilter wraps the SELECT', as
     capture.restore();
   }
 });
+
+test('caseWhen: builds a CQN case/when/then/else/end xpr column', async () => {
+  const capture = captureQuery();
+  try {
+    await executeDescriptor(
+      {
+        entity: 'Orders',
+        select: ['ID'],
+        caseWhen: [{
+          as: 'amount_band',
+          when: [
+            { where: [{ col: 'AMOUNT', op: '<=', val: 0 }], then: 'Healthy' },
+            { where: [{ col: 'AMOUNT', op: '<=', val: 30 }], then: 'Watch' },
+          ],
+          else: 'Default',
+        }],
+      },
+      schema, {}
+    );
+    const col = capture.get().SELECT.columns.find(c => c.as === 'amount_band');
+    assert.deepEqual(col, {
+      xpr: [
+        'case',
+        'when', { ref: ['AMOUNT'] }, '<=', { val: 0 }, 'then', { val: 'Healthy' },
+        'when', { ref: ['AMOUNT'] }, '<=', { val: 30 }, 'then', { val: 'Watch' },
+        'else', { val: 'Default' },
+        'end',
+      ],
+      as: 'amount_band',
+    });
+  } finally {
+    capture.restore();
+  }
+});
+
+test('caseWhen: branches without "else" omit the else token', async () => {
+  const capture = captureQuery();
+  try {
+    await executeDescriptor(
+      {
+        entity: 'Orders',
+        select: ['ID'],
+        caseWhen: [{
+          as: 'status_label',
+          when: [{ where: [{ col: 'AMOUNT', op: '>', val: 100 }], then: 'Big' }],
+        }],
+      },
+      schema, {}
+    );
+    const col = capture.get().SELECT.columns.find(c => c.as === 'status_label');
+    assert.deepEqual(col.xpr, [
+      'case',
+      'when', { ref: ['AMOUNT'] }, '>', { val: 100 }, 'then', { val: 'Big' },
+      'end',
+    ]);
+  } finally {
+    capture.restore();
+  }
+});
+
+test('caseWhen: supports multi-condition (AND-ed) branch where clauses', async () => {
+  const capture = captureQuery();
+  try {
+    await executeDescriptor(
+      {
+        entity: 'Orders',
+        select: ['ID'],
+        caseWhen: [{
+          as: 'band',
+          when: [{
+            where: [
+              { col: 'AMOUNT', op: '>=', val: 10 },
+              { col: 'AMOUNT', op: '<=', val: 20 },
+            ],
+            then: 'Mid',
+          }],
+          else: 'Other',
+        }],
+      },
+      schema, {}
+    );
+    const col = capture.get().SELECT.columns.find(c => c.as === 'band');
+    assert.deepEqual(col.xpr, [
+      'case',
+      'when', { ref: ['AMOUNT'] }, '>=', { val: 10 }, 'and', { ref: ['AMOUNT'] }, '<=', { val: 20 }, 'then', { val: 'Mid' },
+      'else', { val: 'Other' },
+      'end',
+    ]);
+  } finally {
+    capture.restore();
+  }
+});
+
+test('caseWhen: requires "as"', async () => {
+  await assert.rejects(
+    () => executeDescriptor(
+      { entity: 'Orders', select: ['ID'], caseWhen: [{ when: [{ where: [{ col: 'AMOUNT', op: '>', val: 1 }], then: 'X' }] }] },
+      schema, {}
+    ),
+    /"caseWhen" entries require an "as" alias/
+  );
+});
+
+test('caseWhen: requires at least one "when" branch', async () => {
+  await assert.rejects(
+    () => executeDescriptor(
+      { entity: 'Orders', select: ['ID'], caseWhen: [{ as: 'x', when: [] }] },
+      schema, {}
+    ),
+    /requires at least one "when" branch/
+  );
+});
+
+test('caseWhen: each branch requires "where" conditions', async () => {
+  await assert.rejects(
+    () => executeDescriptor(
+      { entity: 'Orders', select: ['ID'], caseWhen: [{ as: 'x', when: [{ then: 'Y' }] }] },
+      schema, {}
+    ),
+    /has a "when" branch with no "where" conditions/
+  );
+});
+
+test('caseWhen: each branch requires a "then" value', async () => {
+  await assert.rejects(
+    () => executeDescriptor(
+      { entity: 'Orders', select: ['ID'], caseWhen: [{ as: 'x', when: [{ where: [{ col: 'AMOUNT', op: '>', val: 1 }] }] }] },
+      schema, {}
+    ),
+    /has a "when" branch with no "then" value/
+  );
+});
+
+test('caseWhen: a column referenced only inside a "when" where clause still extends the entity allowlist walk', async () => {
+  await assert.rejects(
+    () => executeDescriptor(
+      {
+        entity: 'Orders',
+        select: ['ID'],
+        caseWhen: [{
+          as: 'cust_band',
+          when: [{ where: [{ col: 'customer.NAME', op: '=', val: 'Acme' }], then: 'Known' }],
+          else: 'Unknown',
+        }],
+      },
+      schema,
+      { allowedEntities: ['Orders'] } // Customers deliberately excluded
+    ),
+    /reached via association join/
+  );
+});
+
+test('caseWhen columns can coexist with plain "select" columns', async () => {
+  const capture = captureQuery();
+  try {
+    await executeDescriptor(
+      {
+        entity: 'Orders',
+        select: ['ID', 'AMOUNT'],
+        caseWhen: [{
+          as: 'band',
+          when: [{ where: [{ col: 'AMOUNT', op: '>', val: 0 }], then: 'Pos' }],
+          else: 'NonPos',
+        }],
+      },
+      schema, {}
+    );
+    const cols = capture.get().SELECT.columns;
+    assert.ok(cols.some(c => c.ref?.join('.') === 'ID'));
+    assert.ok(cols.some(c => c.ref?.join('.') === 'AMOUNT'));
+    assert.ok(cols.some(c => c.as === 'band'));
+  } finally {
+    capture.restore();
+  }
+});
