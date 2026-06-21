@@ -42,6 +42,11 @@ JOINS — use association path expressions, no "join" field needed:
   - Multiple associations can be used in the same query (e.g. customer.BU_SORT1 and payments.DAYS_OVERDUE)
   - CDS generates optimised SQL JOINs from these paths — HANA handles multi-table joins at scale
 
+AMOUNT/QUANTITY COLUMNS:
+  - If a column's schema entry says "pairs with X", and you select that column, also select
+    X in the same query (so the LLM presenting results can show "1,500 USD" instead of a
+    bare number). This applies even if the question didn't explicitly mention currency/unit.
+
 RANGE HINTS:
   - A column shown as "COL:Type[min..max]" has a known valid domain. If the question implies
     a filter value outside that range, it's more likely the question used a different unit/
@@ -98,7 +103,7 @@ RULES:
 5. "limit" controls how many rows to return — use what the question implies, default 50.
 6. Return ONLY the JSON object — no markdown fences, no explanation, no comments.
 7. Never select the same leaf column name twice (e.g. avoid selecting LOAN_ID and assocAlias.LOAN_ID in the same query — pick one).
-8. If a column's schema entry says "readable text available via X" (a @Common.Text value-help column) and the question refers to the value by its human meaning (e.g. "active", "closed", "expired") rather than a raw code you already know, do NOT guess the raw code. Instead filter on the text association path directly using "like", e.g. {"col": "status.TEXT", "op": "like", "val": "Active"} — this is reliable regardless of what the underlying raw code actually is.
+8. If a column's schema entry says "readable text available via X" (a value-help column, via @Common.Text or @Common.ValueList) and the question refers to the value by its human meaning (e.g. "active", "closed", "expired") rather than a raw code you already know, do NOT guess the raw code. Instead filter on the text association path directly using "like", e.g. {"col": "status.TEXT", "op": "like", "val": "Active"} — this is reliable regardless of what the underlying raw code actually is.
 9. Do NOT add extra filters, conditions, joins, or business assumptions that the user did not ask for. Prefer the minimum query that answers the question.
 10. Words like "active", "closed", or "expired" usually describe a status value only. Do NOT infer overdue payments, arrears, missed instalments, dunning, or delinquency unless the question explicitly asks for them.
 11. If the question asks for "active loans with customer name and loan amount", that means filter loan status to active and select the customer name and loan amount. It does NOT imply any payment-status filter such as payments.DAYS_OVERDUE > 0.

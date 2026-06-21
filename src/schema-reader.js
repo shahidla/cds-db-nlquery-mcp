@@ -128,6 +128,13 @@ function buildSchema(cdsModel) {
           meta.range = col['@assert.range'];
         }
 
+        // @Semantics.amount.currencyCode / @Semantics.quantity.unitOfMeasure pair an
+        // amount/quantity column with the column holding its currency/unit code — a
+        // signal the LLM should select both together so the presented value isn't a
+        // bare number (e.g. "1500" instead of "1500 USD").
+        const pairCol = col['@Semantics.amount.currencyCode'] || col['@Semantics.quantity.unitOfMeasure'];
+        if (pairCol) meta.pairedWith = pairCol;
+
         // Native CDS enum (e.g. `STATUS : String(1) enum { active = 'A'; closed = 'C'; }`)
         // — the same SAP-standard mechanism Fiori uses for value help / coded dropdowns.
         // Captured as { rawValue: symbolicName } so the LLM knows both the business term
@@ -150,8 +157,37 @@ function buildSchema(cdsModel) {
           meta.textVia = textRef['='];
         }
 
+        // @Common.ValueList — the broader OData/Fiori value-help annotation (vs. the
+        // simpler @Common.Text 1:1 lookup already handled above). Resolution needs the
+        // full `joins` map for this entity, which isn't built yet mid-loop, so stash the
+        // raw annotation and resolve it in a second pass below once `joins` is complete.
+        if (!meta.textVia && col['@Common.ValueList']?.CollectionPath) {
+          meta._pendingValueList = col['@Common.ValueList'];
+        }
+
         columns[colName] = meta;
         if (col.key) key = colName;
+      }
+    }
+
+    // Resolve @Common.ValueList — find an existing association alias whose target
+    // matches CollectionPath, and a ValueListParameterDisplayOnly entry (a context label,
+    // not the round-trip key column from ValueListParameterInOut) to use as the text.
+    // If no matching association exists, this annotation can't be turned into a join
+    // path — skip silently rather than inventing one.
+    for (const meta of Object.values(columns)) {
+      const valueList = meta._pendingValueList;
+      delete meta._pendingValueList;
+      if (!valueList) continue;
+
+      const targetShortName = valueList.CollectionPath.split('.').pop();
+      const alias = Object.keys(joins).find(a => joins[a].entity.split('.').pop() === targetShortName);
+      if (!alias) continue;
+
+      const labelParam = (valueList.Parameters || [])
+        .find(p => p.$Type === 'Common.ValueListParameterDisplayOnly');
+      if (labelParam?.ValueListProperty) {
+        meta.textVia = `${alias}.${labelParam.ValueListProperty}`;
       }
     }
 
@@ -186,6 +222,7 @@ function buildSchemaPrompt(schema) {
         if (meta.description) s += ` — ${meta.description}`;
         if (meta.synonyms) s += ` (aka: ${meta.synonyms.join(', ')})`;
         if (meta.range) s += `[${meta.range[0]}..${meta.range[1]}]`;
+        if (meta.pairedWith) s += `{pairs with ${meta.pairedWith} — always select both together}`;
         if (meta.enum) {
           const pairs = Object.entries(meta.enum).map(([val, name]) => `${name}="${val}"`).join(',');
           s += `{values: ${pairs} — use the raw value in filters}`;

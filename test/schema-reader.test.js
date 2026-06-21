@@ -171,6 +171,82 @@ test('@assert.range is captured and rendered as [min..max]', () => {
   assert.match(prompt, /DTI:Decimal\[0\.\.50\]/);
 });
 
+test('@Semantics.amount.currencyCode pairs an amount column with its currency column', () => {
+  const csn = linkedModel({
+    'app.Orders': {
+      kind: 'entity',
+      elements: {
+        ID:       { type: 'cds.String', key: true },
+        AMOUNT:   { type: 'cds.Decimal', '@Semantics.amount.currencyCode': 'CURRENCY' },
+        CURRENCY: { type: 'cds.String' },
+      },
+    },
+  });
+  const schema = buildSchema(csn);
+  assert.equal(schema.Orders.columns.AMOUNT.pairedWith, 'CURRENCY');
+  const prompt = buildSchemaPrompt(schema);
+  assert.match(prompt, /pairs with CURRENCY/);
+});
+
+test('@Common.ValueList resolves to a textVia path via a matching association', () => {
+  const csn = linkedModel({
+    'app.Loans': {
+      kind: 'entity',
+      elements: {
+        ID: { type: 'cds.String', key: true },
+        SECTOR: {
+          type: 'cds.String',
+          '@Common.ValueList': {
+            CollectionPath: 'Sectors',
+            Parameters: [
+              { $Type: 'Common.ValueListParameterInOut', LocalDataProperty: 'SECTOR', ValueListProperty: 'CODE' },
+              { $Type: 'Common.ValueListParameterDisplayOnly', ValueListProperty: 'DESCRIPTION' },
+            ],
+          },
+        },
+        sector: {
+          type: 'cds.Association',
+          isAssociation: true,
+          target: 'app.Sectors',
+          cardinality: { max: 1 },
+          on: [{ ref: ['sector', 'CODE'] }, '=', { ref: ['SECTOR'] }],
+        },
+      },
+    },
+    'app.Sectors': {
+      kind: 'entity',
+      elements: {
+        CODE:        { type: 'cds.String', key: true },
+        DESCRIPTION: { type: 'cds.String' },
+      },
+    },
+  });
+  const schema = buildSchema(csn);
+  assert.equal(schema.Loans.columns.SECTOR.textVia, 'sector.DESCRIPTION');
+});
+
+test('@Common.ValueList with no matching association is skipped, not crashed', () => {
+  const csn = linkedModel({
+    'app.Loans': {
+      kind: 'entity',
+      elements: {
+        ID: { type: 'cds.String', key: true },
+        SECTOR: {
+          type: 'cds.String',
+          '@Common.ValueList': {
+            CollectionPath: 'Sectors', // no association to Sectors exists on Loans
+            Parameters: [
+              { $Type: 'Common.ValueListParameterDisplayOnly', ValueListProperty: 'DESCRIPTION' },
+            ],
+          },
+        },
+      },
+    },
+  });
+  const schema = buildSchema(csn);
+  assert.equal(schema.Loans.columns.SECTOR.textVia, undefined);
+});
+
 test('colliding short names fall back to fully-qualified keys', () => {
   const csn = linkedModel({
     'sales.Order':   { kind: 'entity', elements: { ID: { type: 'cds.String', key: true } } },
