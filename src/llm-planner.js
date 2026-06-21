@@ -42,6 +42,10 @@ JOINS — use association path expressions, no "join" field needed:
   - Multiple associations can be used in the same query (e.g. customer.BU_SORT1 and payments.DAYS_OVERDUE)
   - CDS generates optimised SQL JOINs from these paths — HANA handles multi-table joins at scale
 
+CALCULATED COLUMNS:
+  - Columns tagged "[calculated]" are computed by the database on every query — select them
+    like any other column.
+
 AMOUNT/QUANTITY COLUMNS:
   - If a column's schema entry says "pairs with X", and you select that column, also select
     X in the same query (so the LLM presenting results can show "1,500 USD" instead of a

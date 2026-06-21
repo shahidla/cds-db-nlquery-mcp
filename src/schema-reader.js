@@ -102,7 +102,15 @@ function buildSchema(cdsModel) {
 
         joins[alias] = { entity: targetKey, from: keys.from, to: keys.to, type: joinType };
 
-      } else if (col.type && !col.virtual) {
+      } else if (col.type && col.virtual) {
+        // Virtual elements are never persisted — populated by custom handler code at
+        // runtime, not safe to SELECT via cds.run(). Skip, but log so a developer
+        // adding @NLP.label to a field they expect to be queryable knows why it isn't.
+        process.stderr.write(
+          `[cds-db-nlquery-mcp] Skipping virtual element "${fqn}.${colName}" — not queryable via cds.run().\n`
+        );
+
+      } else if (col.type) {
         // @NLP.label takes precedence (room for disambiguation text), falls back to
         // the standard CDS @title annotation (e.g. already used for Fiori labels).
         const meta = {
@@ -134,6 +142,11 @@ function buildSchema(cdsModel) {
         // bare number (e.g. "1500" instead of "1500 USD").
         const pairCol = col['@Semantics.amount.currencyCode'] || col['@Semantics.quantity.unitOfMeasure'];
         if (pairCol) meta.pairedWith = pairCol;
+
+        // Calculated-on-read elements (colName = (expression)) are computed by the DB
+        // on every query — safe to SELECT like any stored column, but tagged so the LLM
+        // understands it's a derived value (e.g. some DBs can't index a computed expression).
+        if (col.value) meta.calculated = true;
 
         // Native CDS enum (e.g. `STATUS : String(1) enum { active = 'A'; closed = 'C'; }`)
         // — the same SAP-standard mechanism Fiori uses for value help / coded dropdowns.
@@ -223,6 +236,7 @@ function buildSchemaPrompt(schema) {
         if (meta.synonyms) s += ` (aka: ${meta.synonyms.join(', ')})`;
         if (meta.range) s += `[${meta.range[0]}..${meta.range[1]}]`;
         if (meta.pairedWith) s += `{pairs with ${meta.pairedWith} — always select both together}`;
+        if (meta.calculated) s += '[calculated]';
         if (meta.enum) {
           const pairs = Object.entries(meta.enum).map(([val, name]) => `${name}="${val}"`).join(',');
           s += `{values: ${pairs} — use the raw value in filters}`;

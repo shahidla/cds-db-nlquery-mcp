@@ -247,6 +247,41 @@ test('@Common.ValueList with no matching association is skipped, not crashed', (
   assert.equal(schema.Loans.columns.SECTOR.textVia, undefined);
 });
 
+test('calculated-on-read elements are exposed with a calculated marker', () => {
+  const csn = linkedModel({
+    'app.Customers': {
+      kind: 'entity',
+      elements: {
+        ID:    { type: 'cds.String', key: true },
+        FIRST: { type: 'cds.String' },
+        LAST:  { type: 'cds.String' },
+        FULL:  {
+          type: 'cds.String',
+          value: { xpr: [{ ref: ['FIRST'] }, '||', { val: ' ' }, '||', { ref: ['LAST'] }] },
+        },
+      },
+    },
+  });
+  const schema = buildSchema(csn);
+  assert.equal(schema.Customers.columns.FULL.calculated, true);
+  const prompt = buildSchemaPrompt(schema);
+  assert.match(prompt, /FULL:String\[calculated\]/);
+});
+
+test('virtual elements are excluded from columns', () => {
+  const csn = linkedModel({
+    'app.Customers': {
+      kind: 'entity',
+      elements: {
+        ID:     { type: 'cds.String', key: true },
+        HIDDEN: { type: 'cds.String', virtual: true },
+      },
+    },
+  });
+  const schema = buildSchema(csn);
+  assert.equal(schema.Customers.columns.HIDDEN, undefined);
+});
+
 test('colliding short names fall back to fully-qualified keys', () => {
   const csn = linkedModel({
     'sales.Order':   { kind: 'entity', elements: { ID: { type: 'cds.String', key: true } } },
