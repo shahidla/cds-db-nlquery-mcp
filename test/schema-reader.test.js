@@ -315,3 +315,44 @@ test('buildSchemaPrompt renders columns, enum values, and joins as text', () => 
   assert.match(prompt, /Loans/);
   assert.match(prompt, /active="A"/);
 });
+
+test('@cds.search columns are captured as searchableColumns, excluding false entries', () => {
+  const csn = linkedModel({
+    'app.Customers': {
+      kind: 'entity',
+      '@cds.search': { NAME: true, NOTES: true, INTERNAL_ID: false },
+      elements: {
+        ID:          { type: 'cds.String', key: true },
+        NAME:        { type: 'cds.String' },
+        NOTES:       { type: 'cds.String' },
+        INTERNAL_ID: { type: 'cds.String' },
+      },
+    },
+  });
+  const schema = buildSchema(csn);
+  assert.deepEqual(schema.Customers.searchableColumns, ['NAME', 'NOTES']);
+});
+
+test('entities without @cds.search get an empty searchableColumns array', () => {
+  const csn = linkedModel({
+    'app.Customers': { kind: 'entity', elements: { ID: { type: 'cds.String', key: true } } },
+  });
+  const schema = buildSchema(csn);
+  assert.deepEqual(schema.Customers.searchableColumns, []);
+});
+
+test('buildSchemaPrompt renders searchable columns on the entity header', () => {
+  const csn = linkedModel({
+    'app.Customers': {
+      kind: 'entity',
+      '@cds.search': { NAME: true },
+      elements: {
+        ID:   { type: 'cds.String', key: true },
+        NAME: { type: 'cds.String' },
+      },
+    },
+  });
+  const schema = buildSchema(csn);
+  const prompt = buildSchemaPrompt(schema);
+  assert.match(prompt, /searchable: NAME/);
+});

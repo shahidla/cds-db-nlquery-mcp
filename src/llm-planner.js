@@ -19,6 +19,7 @@ DESCRIPTOR FORMAT:
   "aggregate": [{ "fn": "count"|"sum"|"avg"|"min"|"max", "col": "COL or assocAlias.COL or *", "as": "alias" }] (optional),
   "groupBy":  ["COL or assocAlias.COL", ...] (optional),
   "having":   [{ "fn": "...", "col": "...", "op": "...", "val": ... }] (optional),
+  "search":   "free text term" (optional),
   "orderBy":  "COL or assocAlias.COL" or null,
   "orderDir": "ASC" | "DESC",
   "limit":    50
@@ -66,6 +67,16 @@ AGGREGATION:
     to filter on the aggregated value itself, e.g. "customers with more than 5 loans".
   - Do NOT use groupBy/aggregate for simple row-listing questions — only when the question
     asks for a computed summary across multiple rows.
+
+FREE-TEXT SEARCH:
+  - An entity shown with a "searchable: COL1, COL2, ..." line declares which columns
+    participate in CAP's built-in free-text search. If the question is a vague/unscoped
+    match across an entity (e.g. "find anything about acme", "search loans for 'overdue'")
+    rather than a filter on one specific column you can already name, use
+    "search": "term" instead of guessing which column the term lives in.
+  - Do NOT use "search" on an entity that has no "searchable:" line — use a normal "where"
+    condition on a specific column instead.
+  - "search" is AND-ed with any other "where" conditions in the same query.
 
 EXISTENCE FILTERS (to-many associations):
   - To filter parent rows by "has at least one related row matching X", use:

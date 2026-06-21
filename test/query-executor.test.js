@@ -10,6 +10,7 @@ const schema = {
     key: 'ID', fqn: 'app.Orders',
     columns: { ID: { type: 'String' }, AMOUNT: { type: 'Decimal' }, SECRET: { type: 'String' } },
     joins: { customer: { entity: 'Customers', from: 'CUSTOMER', to: 'ID', type: 'INNER' } },
+    searchableColumns: ['ID'],
   },
   Customers: {
     key: 'ID', fqn: 'app.Customers',
@@ -300,5 +301,40 @@ test('unknown entity throws a clear error', async () => {
   await assert.rejects(
     () => executeDescriptor({ entity: 'DoesNotExist' }, schema, {}),
     /Unknown entity/
+  );
+});
+
+test('search builds an OR-of-LIKE condition across searchableColumns', async () => {
+  const capture = captureQuery();
+  try {
+    await executeDescriptor({ entity: 'Orders', search: 'abc' }, schema, {});
+    const where = capture.get().SELECT.where;
+    assert.ok(where[0].xpr, 'search must be wrapped in (xpr) for correct precedence');
+    assert.equal(where[0].xpr[0].func, 'upper');
+    assert.equal(where[0].xpr[2].val, '%ABC%');
+  } finally {
+    capture.restore();
+  }
+});
+
+test('search is AND-ed with other where conditions', async () => {
+  const capture = captureQuery();
+  try {
+    await executeDescriptor(
+      { entity: 'Orders', where: [{ col: 'AMOUNT', op: '>', val: 10 }], search: 'abc' },
+      schema, {}
+    );
+    const where = capture.get().SELECT.where;
+    assert.equal(where[3], 'and');
+    assert.ok(where[4].xpr, 'search group must follow the other where conditions, AND-ed');
+  } finally {
+    capture.restore();
+  }
+});
+
+test('search on an entity with no searchableColumns throws a clear error', async () => {
+  await assert.rejects(
+    () => executeDescriptor({ entity: 'Customers', search: 'abc' }, schema, {}),
+    /has no @cds\.search columns declared/
   );
 });

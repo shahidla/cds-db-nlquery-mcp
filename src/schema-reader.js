@@ -206,6 +206,15 @@ function buildSchema(cdsModel) {
 
     const shortName  = fqn.split('.').pop();
     const entityKey  = keyFor(fqn);
+
+    // @cds.search declares which columns participate in CAP's built-in free-text
+    // search query option — lets the LLM use a single "search" term instead of
+    // having to guess which column a vague match term lives in.
+    const searchAnno = def['@cds.search'];
+    const searchableColumns = searchAnno
+      ? Object.keys(searchAnno).filter(k => searchAnno[k] !== false)
+      : [];
+
     schema[entityKey] = {
       label:       def['@NLP.label'] || def['@title'] || shortName,
       description: def['@description'] || def['@Core.Description'] || null,
@@ -213,6 +222,7 @@ function buildSchema(cdsModel) {
       fqn,
       columns,
       joins,
+      searchableColumns,
     };
   }
 
@@ -253,6 +263,7 @@ function buildSchemaPrompt(schema) {
     lines.push(`${name} [${def.label}]${def.description ? ` — ${def.description}` : ''}`);
     lines.push(`  columns: ${cols}`);
     if (joins) lines.push(`  joins:   ${joins}`);
+    if (def.searchableColumns?.length) lines.push(`  searchable: ${def.searchableColumns.join(', ')}`);
   }
   return lines.join('\n');
 }

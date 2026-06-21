@@ -198,6 +198,15 @@ function buildHavingExpr(conditions) {
   return joinTokens('and', parts);
 }
 
+// Builds an OR-of-LIKE token group across an entity's @cds.search columns, e.g.
+// {"search": "acme"} on an entity with searchable: NAME, NOTES becomes
+// (upper(NAME) like '%ACME%' or upper(NOTES) like '%ACME%') — reuses the same
+// case-insensitive 'like' leaf shape as a normal where condition.
+function buildSearchExpr(term, searchableColumns) {
+  const tokens = joinTokens('or', searchableColumns.map(col => buildLeafTokens({ col, op: 'like', val: term })));
+  return [{ xpr: tokens }];
+}
+
 /**
  * Execute a query descriptor against the CDS db layer.
  *
@@ -213,6 +222,8 @@ function buildHavingExpr(conditions) {
  *   aggregate — [{ fn: 'count'|'sum'|'avg'|'min'|'max', col: 'COLUMN or assocAlias.COLUMN or *', as }]
  *   groupBy   — ['COLUMN or assocAlias.COLUMN', ...]
  *   having    — [{ fn, col, op, val }] — filters on an aggregate value (e.g. count(LOAN_ID) > 5)
+ *   search    — free-text term matched against the entity's @cds.search columns (AND-ed
+ *               with any other where conditions); errors if the entity declares none
  *   orderBy   — column or 'assoc.COL'
  *   orderDir  — 'ASC' | 'DESC'
  *   limit     — rows requested (capped by server maxRows, enforced at SQL LIMIT)
@@ -231,6 +242,7 @@ async function executeDescriptor(descriptor, schema, callConfig = {}) {
     aggregate,
     groupBy,
     having,
+    search,
     orderBy, orderDir,
     limit: rawLimit = 50,
     offset: rawOffset = 0,
@@ -348,7 +360,19 @@ async function executeDescriptor(descriptor, schema, callConfig = {}) {
   const q = SELECT.from(entityDef.fqn);
   if (cols?.length) q.columns(...cols);
 
-  const whereExpr = buildWhereExpr(where, entityDef, schema);
+  let whereExpr = buildWhereExpr(where, entityDef, schema);
+
+  if (search != null && search !== '') {
+    if (!entityDef.searchableColumns?.length) {
+      throw new Error(
+        `Entity "${entity}" has no @cds.search columns declared — free-text "search" is not supported for it. ` +
+        `Use an explicit "where" condition instead.`
+      );
+    }
+    const searchExpr = buildSearchExpr(search, entityDef.searchableColumns);
+    whereExpr = whereExpr ? joinTokens('and', [whereExpr, searchExpr]) : searchExpr;
+  }
+
   if (whereExpr) q.where(whereExpr);
 
   if (groupBy?.length) q.groupBy(...groupBy);
