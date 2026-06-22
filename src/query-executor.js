@@ -487,6 +487,34 @@ function truncateExpandRows(rows, expandList, maxExpandRows) {
   return rows;
 }
 
+// Translates a row's own enum columns to their _text business-term siblings (see
+// call site for why), then recurses into any "expand" children using the join
+// metadata to find each one's own entity definition in the schema.
+function applyEnumToRow(row, entityDef) {
+  const enumCols = Object.entries(entityDef.columns).filter(([, meta]) => meta.enum);
+  if (enumCols.length === 0) return row;
+  const out = { ...row };
+  for (const [col, meta] of enumCols) {
+    if (col in out && meta.enum[out[col]]) {
+      out[`${col}_text`] = meta.enum[out[col]];
+    }
+  }
+  return out;
+}
+
+function applyEnumTranslation(rows, entityDef, expandList, schema) {
+  return rows.map(row => {
+    const out = applyEnumToRow(row, entityDef);
+    for (const node of expandList || []) {
+      const targetDef = schema[entityDef.joins[node.assoc].entity];
+      if (Array.isArray(out[node.assoc])) {
+        out[node.assoc] = applyEnumTranslation(out[node.assoc], targetDef, node.expand, schema);
+      }
+    }
+    return out;
+  });
+}
+
 // Executes a "hierarchy" descriptor — unbounded traversal of a self-referencing
 // association ("all descendants", "the full ancestor chain"), where a fixed-depth
 // "assocAlias.assocAlias.COL" path can't reach an arbitrary number of hops.
@@ -962,31 +990,40 @@ async function executeDescriptor(descriptor, schema, callConfig = {}) {
   if (expand?.length) rows = truncateExpandRows(rows, expand, serverCfg.maxExpandRows);
 
   // Translate enum raw values back to business terms (same mechanism Fiori uses for
-  // coded value display) — e.g. STATUS: "C" also gets STATUS_text: "closed" alongside it.
-  // Raw value is kept as-is; the _text sibling is additive, never replaces it.
-  const enumCols = Object.entries(entityDef.columns).filter(([, meta]) => meta.enum);
-  if (enumCols.length > 0) {
-    rows = rows.map(row => {
-      const out = { ...row };
-      for (const [col, meta] of enumCols) {
-        if (col in out && meta.enum[out[col]]) {
-          out[`${col}_text`] = meta.enum[out[col]];
-        }
-      }
-      return out;
-    });
-  }
+  // coded value display) — e.g. STATUS: "C" also gets STATUS_text: "closed" alongside
+  // it. Raw value is kept as-is; the _text sibling is additive, never replaces it.
+  // Recurses into "expand"'s nested arrays too — found via real NL testing that the
+  // original top-level-only version missed an expanded entity's own enum columns
+  // (e.g. Orders.STATUS, when Orders is reached via expand from Customers rather
+  // than queried directly) — same root-cause class as the expand orderBy bug above:
+  // a per-row JS post-processing step that never recursed into expand's children.
+  rows = applyEnumTranslation(rows, entityDef, expand, schema);
 
-  // Belt-and-suspenders: strip blocked columns from result rows (catches * selects)
+  // Belt-and-suspenders: strip blocked columns from result rows (catches * selects).
+  // The primary defense (never selecting a blocked column in the first place) already
+  // applies inside "expand" too (see buildExpandCols' own allBlocked filter), so this
+  // is a backup net, not the only thing standing between a blocked column and the
+  // response — but it should still recurse, for the same reason enum translation and
+  // orderBy needed to: don't let a JS post-processing step silently stop at the
+  // top-level row once "expand" is involved.
   if (allBlocked.size > 0) {
-    return rows.map(row => {
-      const out = { ...row };
-      for (const col of allBlocked) delete out[col];
-      return out;
-    });
+    return stripBlockedFromRows(rows, allBlocked, expand);
   }
 
   return rows;
+}
+
+function stripBlockedFromRows(rows, allBlocked, expandList) {
+  return rows.map(row => {
+    const out = { ...row };
+    for (const col of allBlocked) delete out[col];
+    for (const node of expandList || []) {
+      if (Array.isArray(out[node.assoc])) {
+        out[node.assoc] = stripBlockedFromRows(out[node.assoc], allBlocked, node.expand);
+      }
+    }
+    return out;
+  });
 }
 
 const SET_OPS = ['union', 'intersect', 'except'];

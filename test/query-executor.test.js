@@ -29,7 +29,10 @@ const schema = {
   },
   Items: {
     key: 'ID', fqn: 'app.Items',
-    columns: { ID: { type: 'String' }, PRODUCT: { type: 'String' }, QTY: { type: 'Integer' }, SECRET: { type: 'String' } },
+    columns: {
+      ID: { type: 'String' }, PRODUCT: { type: 'String' }, QTY: { type: 'Integer' }, SECRET: { type: 'String' },
+      STATUS: { type: 'String', enum: { O: 'open', C: 'closed' } },
+    },
     joins: {
       productRef: { entity: 'Products', from: 'PRODUCT', to: 'ID', type: 'INNER', toMany: false },
       parts:      { entity: 'Parts', from: 'ID', to: 'ITEM_ID', type: 'LEFT', toMany: true },
@@ -495,6 +498,29 @@ test('expand orderBy rejects an association path — only a plain column is supp
     );
   } finally {
     capture.restore();
+  }
+});
+
+test('enum-to-text translation recurses into expand\'s nested rows', async () => {
+  // Found via real NL testing: the original implementation only translated the
+  // TOP-LEVEL entity's own enum columns. Orders.STATUS got its _text sibling when
+  // Orders was queried directly, but not when reached via expand from Customers —
+  // same root-cause class as the orderBy bug above (a per-row JS post-processing
+  // step that never recursed into expand's children).
+  const mock = mockRunSequence([[
+    { ID: 'O1', items: [{ ID: 'I1', STATUS: 'O' }, { ID: 'I2', STATUS: 'C' }] },
+  ]]);
+  try {
+    const rows = await executeDescriptor(
+      { entity: 'Orders', select: ['ID'], expand: [{ assoc: 'items', select: ['ID', 'STATUS'] }] },
+      schema, {}
+    );
+    assert.deepEqual(rows[0].items, [
+      { ID: 'I1', STATUS: 'O', STATUS_text: 'open' },
+      { ID: 'I2', STATUS: 'C', STATUS_text: 'closed' },
+    ]);
+  } finally {
+    mock.restore();
   }
 });
 
