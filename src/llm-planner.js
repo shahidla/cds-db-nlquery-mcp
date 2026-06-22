@@ -87,12 +87,13 @@ FILTERED JOINS (select/where only — NOT aggregate):
     OWN target entity — never a further "assoc.COL" path off of it.
   - Use a normal top-level "where" condition instead when there's no aggregation, or
     when the filter is meant to exclude whole parent rows (not just scope a value).
-  - viaFiltered is REJECTED inside "aggregate" on this backend (confirmed against real
-    HANA — CDS's own query builder cannot resolve a filtered-association argument
-    inside an aggregate function and throws an internal error). For "total of OPEN
-    payments per loan" style questions, do NOT start from "Loans" with a viaFiltered
-    aggregate. Instead start from the many-side entity directly and group by the
-    foreign key — this expresses the exact same thing and is fully supported:
+  - AVOID viaFiltered inside "aggregate" — it's rejected on a legacy HANA runtime
+    (still common; confirmed real internal CDS error there), and works correctly
+    only on a modern @cap-js/db-service-based adapter, but you have no way to know
+    which one is connected. For "total of OPEN payments per loan" style questions,
+    do NOT start from "Loans" with a viaFiltered aggregate. Instead start from the
+    many-side entity directly and group by the foreign key — this expresses the
+    exact same thing, is fully supported, and works identically on every backend:
     {"entity": "Payments", "select": ["LOAN_ID"], "where": [{"col":"STATUS","op":"=","val":"OPEN"}], "aggregate": [{"fn":"sum","col":"AMOUNT","as":"open_total"}], "groupBy": ["LOAN_ID"]}
 
 AGGREGATION:

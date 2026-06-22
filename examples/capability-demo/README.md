@@ -66,33 +66,41 @@ database (via `@cap-js/sqlite`), not hand-written or recalled from memory. Re-ru
    slightly different SQL text for the same CQN — the CQN itself, and the rows,
    should match regardless of backend).
 
-   **Two confirmed, non-bug differences found by actually running this demo's
-   schema against a real BTP HANA Cloud deployment** (not just SQLite):
-   - **Decimal columns come back as strings on HANA** (`"1500.00"`), as JS numbers
-     on SQLite (`1500`) — same value, different driver representation. Compare
-     numerically, not via strict string/JSON equality.
-   - **An unaliased joined column's default name differs by backend** when there's
-     no leaf-name collision to force an explicit alias — e.g. `sector.DESCRIPTION`
-     with no `as` comes back named `DESCRIPTION` on HANA's legacy runtime, but
-     `sector_DESCRIPTION` on `@cap-js/sqlite`. Give an explicit `{ "col": "...",
-     "as": "..." }` alias whenever consistent column naming across backends
-     matters — don't rely on the implicit default.
+   **Tested against real BTP HANA Cloud with both HANA adapters CDS supports** —
+   the legacy `@sap/hana-client`-based runtime (still the default for most existing
+   CAP+HANA projects), and the modern `@cap-js/db-service`-based `@cap-js/hana`.
+   Findings:
 
-   **One confirmed real limitation of this package's current implementation when
-   connected through the legacy `@sap/hana-client`-based HANA runtime** (still the
-   peer-dep target most existing CAP+HANA projects use today, as opposed to the
-   newer `@cap-js/db-service`-based `@cap-js/hana`):
-   - `viaFiltered` inside `aggregate` or `having` — and **all window functions** —
-     are rejected with a clear error instead of silently producing wrong/broken
-     SQL. Root cause confirmed against a real deployment in both cases (not
-     inferred): CDS's own internal alias-generation utility crashes on a
-     `viaFiltered` ref inside an aggregate argument; window functions' `OVER`
-     clause is silently dropped by the legacy runtime's function renderer. A
-     modern `@cap-js/db-service`-based HANA adapter would very likely render both
-     correctly (confirmed: the shared `func()` renderer in `@cap-js/db-service`,
-     which both `@cap-js/sqlite` and `@cap-js/hana` build on, explicitly handles
-     the CQN shape this package generates) — but switching HANA drivers is the
-     consuming project's decision, not something this package does for them.
+   - **With `@cap-js/hana` installed: all 30 queries pass, exactly matching
+     `results.json`'s SQLite-generated rows.** This includes `viaFiltered` inside
+     `aggregate`/`having` and every window function (rank, top-N-per-group,
+     running total) — confirmed with real, hand-verified numbers (e.g. filtered
+     per-customer sums and per-partition rankings checked by hand against the seed
+     data), not just "didn't throw."
+   - **With the legacy `@sap/hana-client` runtime: 2 things are genuinely broken**,
+     not just inferred — root-caused against a real deployment:
+     - `viaFiltered` inside `aggregate`/`having` crashes inside CDS's own internal
+       alias-generation utility (`generateAliases.js`, `"table.startsWith is not a
+       function"`) — it assumes a plain string table alias, but `viaFiltered`
+       produces a structured `{ id, where }` hop there.
+     - Window functions' `OVER` clause is silently dropped by the legacy runtime's
+       function renderer (no error — the query just runs with the clause missing,
+       then HANA itself throws a syntax error on the malformed SQL that results).
+     This package detects which adapter is connected (via `db.cqn2sql`'s
+     presence) and rejects both with a clear, actionable error **only** on the
+     legacy runtime — on `@cap-js/hana` both work correctly and are not rejected.
+   - **The decimal-as-string-vs-number and unaliased-joined-column-naming
+     differences noted in earlier testing were also legacy-runtime-specific** —
+     `@cap-js/hana` matches `@cap-js/sqlite`'s conventions (JS numbers, and
+     `sector_DESCRIPTION`-style auto-aliasing) exactly. They only matter if you're
+     still on the legacy runtime.
+
+   **Bottom line**: this package's CQN construction is correct for every
+   capability it claims to support — every gap found was in the legacy
+   `@sap/hana-client` runtime itself, not in this package's own code. If you're
+   hitting any of the legacy-runtime errors above, switching to `@cap-js/hana` is
+   confirmed (not just theorized) to resolve them — though that's your project's
+   own dependency decision, not something this package does for you.
 
 ## Regenerating
 

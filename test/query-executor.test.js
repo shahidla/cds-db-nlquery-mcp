@@ -511,14 +511,75 @@ test('expand on an unknown association throws a clear error', async () => {
   );
 });
 
-test('viaFiltered in aggregate.col is rejected (confirmed broken against real HANA)', async () => {
-  // Was previously expected to succeed — the CQN shape itself is valid, but real
-  // HANA testing found CDS's own generateAliases utility crashes ("table.startsWith
-  // is not a function") the moment a viaFiltered ref appears as an aggregate
-  // argument, with or without groupBy. Rejecting explicitly now instead of letting
-  // that cryptic internal error surface.
-  await assert.rejects(
-    () => executeDescriptor(
+test('viaFiltered in aggregate.col is rejected on the legacy adapter (confirmed broken against real HANA)', async () => {
+  // Was previously expected to always succeed — the CQN shape itself is valid, but
+  // real HANA testing found the LEGACY @sap/hana-client runtime's generateAliases
+  // utility crashes ("table.startsWith is not a function") the moment a viaFiltered
+  // ref appears as an aggregate argument, with or without groupBy. Rejecting
+  // explicitly on that adapter instead of letting the cryptic internal error
+  // surface. (Confirmed separately that a modern @cap-js/hana adapter does NOT hit
+  // this — see the "...is allowed on a modern adapter" test below — so the guard
+  // must be conditional, not universal.)
+  const originalDb = cds.db;
+  cds.db = undefined; // simulate the legacy adapter (no cqn2sql)
+  try {
+    await assert.rejects(
+      () => executeDescriptor(
+        {
+          entity: 'Orders', select: ['ID'],
+          aggregate: [{
+            fn: 'sum',
+            col: { col: 'QTY', viaFiltered: { assoc: 'items', where: [{ col: 'PRODUCT', op: '=', val: 'X' }] } },
+            as: 'qty_for_x',
+          }],
+          groupBy: ['ID'],
+        },
+        schema, {}
+      ),
+      /viaFiltered is not supported as an "aggregate" or "having" column/
+    );
+  } finally {
+    cds.db = originalDb;
+  }
+});
+
+test('viaFiltered in having.col is rejected on the legacy adapter (same root cause as aggregate.col)', async () => {
+  // buildHavingExpr() calls into the same buildAggregateCol()/resolveColSpec() path
+  // as a plain aggregate — confirmed hands-on with a correctly-formed { fn, col, op,
+  // val } having entry (an earlier ad-hoc test without "fn" hit a different,
+  // self-inflicted error from a malformed descriptor, not this real one).
+  const originalDb = cds.db;
+  cds.db = undefined; // simulate the legacy adapter (no cqn2sql)
+  try {
+    await assert.rejects(
+      () => executeDescriptor(
+        {
+          entity: 'Orders', select: ['ID'], groupBy: ['ID'],
+          having: [{
+            fn: 'sum',
+            col: { col: 'QTY', viaFiltered: { assoc: 'items', where: [{ col: 'PRODUCT', op: '=', val: 'X' }] } },
+            op: '>', val: 10,
+          }],
+        },
+        schema, {}
+      ),
+      /viaFiltered is not supported as an "aggregate" or "having" column/
+    );
+  } finally {
+    cds.db = originalDb;
+  }
+});
+
+test('viaFiltered in aggregate.col is allowed on a modern adapter (confirmed correct against real HANA via @cap-js/hana)', async () => {
+  // Re-ran the identical CQN directly against a real BTP HANA deployment with the
+  // modern @cap-js/hana adapter installed instead of @sap/hana-client: it returned
+  // correct, mathematically-verified filtered sums — no crash. The module-level
+  // cds.db stub (set at the top of this file) simulates that modern adapter for
+  // every test by default, so no special setup is needed here — just confirming it
+  // does NOT throw and builds the expected CQN.
+  const capture = captureQuery();
+  try {
+    await executeDescriptor(
       {
         entity: 'Orders', select: ['ID'],
         aggregate: [{
@@ -529,30 +590,12 @@ test('viaFiltered in aggregate.col is rejected (confirmed broken against real HA
         groupBy: ['ID'],
       },
       schema, {}
-    ),
-    /viaFiltered is not supported as an "aggregate" or "having" column/
-  );
-});
-
-test('viaFiltered in having.col is rejected (same root cause as aggregate.col)', async () => {
-  // buildHavingExpr() calls into the same buildAggregateCol()/resolveColSpec() path
-  // as a plain aggregate — confirmed hands-on with a correctly-formed { fn, col, op,
-  // val } having entry (an earlier ad-hoc test without "fn" hit a different,
-  // self-inflicted error from a malformed descriptor, not this real one).
-  await assert.rejects(
-    () => executeDescriptor(
-      {
-        entity: 'Orders', select: ['ID'], groupBy: ['ID'],
-        having: [{
-          fn: 'sum',
-          col: { col: 'QTY', viaFiltered: { assoc: 'items', where: [{ col: 'PRODUCT', op: '=', val: 'X' }] } },
-          op: '>', val: 10,
-        }],
-      },
-      schema, {}
-    ),
-    /viaFiltered is not supported as an "aggregate" or "having" column/
-  );
+    );
+    const sumCol = capture.get().SELECT.columns.find(c => c.func === 'sum');
+    assert.equal(sumCol.args[0].ref[0].id, 'items');
+  } finally {
+    capture.restore();
+  }
 });
 
 test('viaFiltered in select attaches the filter to the join hop', async () => {

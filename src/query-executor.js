@@ -691,20 +691,26 @@ async function executeDescriptor(descriptor, schema, callConfig = {}) {
     throw new Error('viaFiltered is not supported in "groupBy" or "orderBy" — only in "select" and "where".');
   }
 
-  // Confirmed against real HANA (not caught by the SQLite-based test suite): when a
-  // viaFiltered ref is used as an aggregate function's argument, CDS's own internal
+  // Confirmed against real HANA: when a viaFiltered ref is used as an aggregate
+  // function's argument, the LEGACY @sap/hana-client-based runtime's internal
   // generateAliases utility crashes with "table.startsWith is not a function" — it
   // assumes ref[0] is always a plain string table alias, but viaFiltered produces a
-  // structured { id, where } hop there. This reproduces with or without "groupBy"
-  // present, so it's a fundamental incompatibility, not something this package's own
-  // CQN construction can work around — reject it with a clear message instead of
-  // letting the cryptic internal crash surface.
-  // "having" hits the identical crash via the same buildAggregateCol() path
-  // buildHavingExpr() calls into — confirmed hands-on (re-tested with a correctly-
-  // formed { fn, col, op, val } having entry, not just inferred from the aggregate
-  // case): "table.startsWith is not a function", same root cause, same fix.
-  if ((aggregate || []).some(a => isFilteredSpec(a.col)) || (having || []).some(h => isFilteredSpec(h.col))) {
-    throw new Error('viaFiltered is not supported as an "aggregate" or "having" column on this backend (HANA) — CDS\'s own query builder cannot resolve a filtered-association argument inside an aggregate function. Use "select"/"where" instead.');
+  // structured { id, where } hop there. Reproduces with or without "groupBy"
+  // present. "having" hits the identical crash via the same buildAggregateCol()
+  // path buildHavingExpr() calls into (re-tested hands-on with a correctly-formed
+  // { fn, col, op, val } having entry, not just inferred from the aggregate case).
+  //
+  // Confirmed this is specifically a legacy-runtime bug, not a fundamental CQN
+  // incompatibility: re-ran the identical CQN directly against a real BTP HANA
+  // deployment with the modern @cap-js/hana adapter installed instead, and it
+  // returned correct, mathematically-verified results (filtered sums matching
+  // hand-computed totals) — no crash. So gate this the same way as the "window"
+  // check below: only reject on the legacy runtime (no db.cqn2sql), not universally.
+  if (
+    typeof cds.db?.cqn2sql !== 'function' &&
+    ((aggregate || []).some(a => isFilteredSpec(a.col)) || (having || []).some(h => isFilteredSpec(h.col)))
+  ) {
+    throw new Error('viaFiltered is not supported as an "aggregate" or "having" column on the legacy @sap/hana-client-based HANA runtime — its query builder cannot resolve a filtered-association argument inside an aggregate function. A modern @cap-js/db-service-based adapter (e.g. @cap-js/hana) supports this correctly. Use "select"/"where" instead if you can\'t switch adapters.');
   }
 
   // "window" keeps every row and attaches a per-row computed value — a different query
