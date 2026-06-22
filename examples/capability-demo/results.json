@@ -3305,7 +3305,7 @@
             },
             "<=",
             {
-              "val": "2026-06-22T03:00:01.950Z"
+              "val": "2026-06-22T03:41:23.346Z"
             },
             "and",
             {
@@ -3315,7 +3315,7 @@
             },
             ">",
             {
-              "val": "2026-06-22T03:00:01.950Z"
+              "val": "2026-06-22T03:41:23.346Z"
             }
           ],
           "limit": {
@@ -3333,7 +3333,7 @@
       "SELECT \"$W\".EMPLOYEE,\"$W\".ROLE FROM capdemo_WorkAssignments as \"$W\" WHERE \"$W\".EMPLOYEE = ? and \"$W\".validFrom <= ? and \"$W\".validTo > ? LIMIT ? OFFSET ?"
     ],
     "readableSql": [
-      "SELECT \"$W\".EMPLOYEE,\"$W\".ROLE \nFROM capdemo_WorkAssignments as \"$W\" \nWHERE \"$W\".EMPLOYEE = 'Alice'\n  AND \"$W\".validFrom <= '2026-06-22T03:00:01.950Z'\n  AND \"$W\".validTo > '2026-06-22T03:00:01.950Z' \nLIMIT 50 OFFSET 0"
+      "SELECT \"$W\".EMPLOYEE,\"$W\".ROLE \nFROM capdemo_WorkAssignments as \"$W\" \nWHERE \"$W\".EMPLOYEE = 'Alice'\n  AND \"$W\".validFrom <= '2026-06-22T03:41:23.346Z'\n  AND \"$W\".validTo > '2026-06-22T03:41:23.346Z' \nLIMIT 50 OFFSET 0"
     ],
     "rows": [
       {

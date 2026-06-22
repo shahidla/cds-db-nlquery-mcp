@@ -15,6 +15,7 @@ entity Orders {
   key ID          : String(10);
       CUSTOMER_ID : String(10);
       AMOUNT      : Decimal(15,2) @Semantics.amount.currencyCode: 'CURRENCY';
+      @NLP.label: 'Currency code (e.g. USD, EUR) — a text code, never numeric. Never SUM/AVG/MIN/MAX this column — aggregate AMOUNT instead.'
       CURRENCY    : String(3);
       STATUS      : String(1) enum { open = 'O'; closed = 'C'; };
       ORDER_DATE  : Date;

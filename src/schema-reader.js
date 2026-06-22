@@ -289,7 +289,7 @@ function buildSchemaPrompt(schema) {
         if (meta.calculated) s += '[calculated]';
         if (meta.enum) {
           const pairs = Object.entries(meta.enum).map(([val, name]) => `${name}="${val}"`).join(',');
-          s += `{values: ${pairs} — use the raw value in filters}`;
+          s += `{values: ${pairs} — use the raw value in filters. Selecting "${c}" alone ALSO gets you a "${c}_text" business-term field in every result row, with NO extra effort: do not select "${c}_text" yourself (it is not a real column, you cannot select it — it just appears in the output), and do not add your own "caseWhen" to relabel "${c}" (you would create a duplicate/conflicting column with the one already added for you)}`;
         }
         if (meta.textVia) {
           s += `{readable text available via "${meta.textVia}" — include it in select to show the human-readable value, AND use this path (not the raw "${c}" column) when the question filters by a human term like "active"/"closed"/"overdue" rather than a raw code}`;
