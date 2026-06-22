@@ -6,9 +6,12 @@ Orders [Orders]
   columns: ID:String, CUSTOMER_ID:String, AMOUNT:Decimal{pairs with CURRENCY — always select both together}, CURRENCY:String, STATUS:String{values: open="O",closed="C" — use the raw value in filters}, ORDER_DATE:Date
   joins:   "customer"→Customers(CUSTOMER_ID=ID,INNER), "items"→OrderItems(ID=ORDER_ID,LEFT,toMany)
 OrderItems [OrderItems]
-  columns: ID:String, ORDER_ID:String, PRODUCT:String, QTY:Integer
+  columns: ID:String, ORDER_ID:String, PRODUCT_ID:String, PRODUCT:String, QTY:Integer, STATUS:String{values: pending="P",shipped="S" — use the raw value in filters}
+  joins:   "product"→Products(PRODUCT_ID=ID,INNER)
+Products [Products]
+  columns: ID:String, NAME:String, SECRET:String, STATUS:String{values: active="A",discontinued="D" — use the raw value in filters}
 Accounts [Accounts]
-  columns: ID:String, NAME:String, PARENT_ID:String
+  columns: ID:String, NAME:String, PARENT_ID:String, STATUS:String{values: active="A",closed="X" — use the raw value in filters}
   joins:   "parent"→Accounts(PARENT_ID=ID,INNER){self-referencing — hierarchy}, "children"→Accounts(ID=PARENT_ID,LEFT,toMany){self-referencing — hierarchy}
 Sectors [Sectors]
   columns: CODE:String, DESCRIPTION:String

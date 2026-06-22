@@ -23,16 +23,32 @@ entity Orders {
 }
 
 entity OrderItems {
-  key ID       : String(10);
-      ORDER_ID : String(10);
-      PRODUCT  : String(50);
-      QTY      : Integer;
+  key ID        : String(10);
+      ORDER_ID  : String(10);
+      PRODUCT_ID : String(10);
+      PRODUCT   : String(50);
+      QTY       : Integer;
+      STATUS    : String(1) enum { pending = 'P'; shipped = 'S'; };
+      product   : Association to Products on product.ID = PRODUCT_ID;
+}
+
+// to-one target nested two levels deep under Orders (Orders -[to-many]-> items
+// -[to-one]-> product) — exercises enum/blocked-column/select recursion through a
+// to-one expand branch specifically, which comes back as a plain object rather
+// than an array (a real gap found by systematic testing: every JS post-processing
+// step on expand results originally only ever checked Array.isArray()).
+entity Products {
+  key ID     : String(10);
+      NAME   : String(50);
+      SECRET : String(50);
+      STATUS : String(1) enum { active = 'A'; discontinued = 'D'; };
 }
 
 entity Accounts {
   key ID        : String(10);
       NAME      : String(100);
       PARENT_ID : String(10);
+      STATUS    : String(1) enum { active = 'A'; closed = 'X'; };
       parent    : Association to Accounts on parent.ID = PARENT_ID;
       children  : Association to many Accounts on children.PARENT_ID = ID;
 }

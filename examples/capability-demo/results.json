@@ -1017,9 +1017,24 @@
               ]
             },
             {
-              "ref": [
-                "FULL"
-              ]
+              "xpr": [
+                {
+                  "ref": [
+                    "FIRST"
+                  ]
+                },
+                "||",
+                {
+                  "val": " "
+                },
+                "||",
+                {
+                  "ref": [
+                    "LAST"
+                  ]
+                }
+              ],
+              "as": "FULL"
             }
           ],
           "limit": {
@@ -1210,7 +1225,7 @@
             },
             ">=",
             {
-              "val": "2026-04-22"
+              "val": "2026-04-23"
             },
             "and",
             {
@@ -1220,7 +1235,7 @@
             },
             "<=",
             {
-              "val": "2026-06-21"
+              "val": "2026-06-22"
             }
           ],
           "limit": {
@@ -1238,7 +1253,7 @@
       "SELECT \"$O\".ID,\"$O\".ORDER_DATE FROM capdemo_Orders as \"$O\" WHERE \"$O\".ORDER_DATE >= ? and \"$O\".ORDER_DATE <= ? LIMIT ? OFFSET ?"
     ],
     "readableSql": [
-      "SELECT \"$O\".ID,\"$O\".ORDER_DATE \nFROM capdemo_Orders as \"$O\" \nWHERE \"$O\".ORDER_DATE >= '2026-04-22'\n  AND \"$O\".ORDER_DATE <= '2026-06-21' \nLIMIT 50 OFFSET 0"
+      "SELECT \"$O\".ID,\"$O\".ORDER_DATE \nFROM capdemo_Orders as \"$O\" \nWHERE \"$O\".ORDER_DATE >= '2026-04-23'\n  AND \"$O\".ORDER_DATE <= '2026-06-22' \nLIMIT 50 OFFSET 0"
     ],
     "rows": [
       {
@@ -1278,7 +1293,7 @@
     "sql": null,
     "readableSql": null,
     "rows": null,
-    "error": "Unknown entity \"InternalAudit\". Known: Customers, Orders, OrderItems, Accounts, Sectors, Loans, WorkAssignments"
+    "error": "Unknown entity \"InternalAudit\". Known: Customers, Orders, OrderItems, Products, Accounts, Sectors, Loans, WorkAssignments"
   },
   {
     "id": "new-01-hierarchy-descendants",
@@ -1869,12 +1884,7 @@
                     "QTY"
                   ]
                 }
-              ],
-              "limit": {
-                "rows": {
-                  "val": 20
-                }
-              }
+              ]
             }
           ],
           "limit": {
@@ -1889,10 +1899,10 @@
       }
     ],
     "sql": [
-      "SELECT \"$O\".ID,\"$O\".CUSTOMER_ID,(SELECT jsonb_group_array(jsonb_insert('{}','$.\"PRODUCT\"',PRODUCT,'$.\"QTY\"',QTY)) as _json_ FROM (SELECT \"$i\".PRODUCT,\"$i\".QTY FROM capdemo_OrderItems as \"$i\" WHERE \"$i\".ORDER_ID = \"$O\".ID LIMIT ?)) as items FROM capdemo_Orders as \"$O\" LIMIT ? OFFSET ?"
+      "SELECT \"$O\".ID,\"$O\".CUSTOMER_ID,(SELECT jsonb_group_array(jsonb_insert('{}','$.\"PRODUCT\"',PRODUCT,'$.\"QTY\"',QTY)) as _json_ FROM (SELECT \"$i\".PRODUCT,\"$i\".QTY FROM capdemo_OrderItems as \"$i\" WHERE \"$i\".ORDER_ID = \"$O\".ID)) as items FROM capdemo_Orders as \"$O\" LIMIT ? OFFSET ?"
     ],
     "readableSql": [
-      "SELECT \"$O\".ID,\"$O\".CUSTOMER_ID,(SELECT jsonb_group_array(jsonb_insert('{}','$.\"PRODUCT\"',PRODUCT,'$.\"QTY\"',QTY)) as _json_ \nFROM (SELECT \"$i\".PRODUCT,\"$i\".QTY \nFROM capdemo_OrderItems as \"$i\" \nWHERE \"$i\".ORDER_ID = \"$O\".ID \nLIMIT 20)) as items \nFROM capdemo_Orders as \"$O\" \nLIMIT 50 OFFSET 0"
+      "SELECT \"$O\".ID,\"$O\".CUSTOMER_ID,(SELECT jsonb_group_array(jsonb_insert('{}','$.\"PRODUCT\"',PRODUCT,'$.\"QTY\"',QTY)) as _json_ \nFROM (SELECT \"$i\".PRODUCT,\"$i\".QTY \nFROM capdemo_OrderItems as \"$i\" \nWHERE \"$i\".ORDER_ID = \"$O\".ID)) as items \nFROM capdemo_Orders as \"$O\" \nLIMIT 50 OFFSET 0"
     ],
     "rows": [
       {
@@ -3295,7 +3305,7 @@
             },
             "<=",
             {
-              "val": "2026-06-21T06:10:47.508Z"
+              "val": "2026-06-22T02:39:08.276Z"
             },
             "and",
             {
@@ -3305,7 +3315,7 @@
             },
             ">",
             {
-              "val": "2026-06-21T06:10:47.508Z"
+              "val": "2026-06-22T02:39:08.276Z"
             }
           ],
           "limit": {
@@ -3323,12 +3333,828 @@
       "SELECT \"$W\".EMPLOYEE,\"$W\".ROLE FROM capdemo_WorkAssignments as \"$W\" WHERE \"$W\".EMPLOYEE = ? and \"$W\".validFrom <= ? and \"$W\".validTo > ? LIMIT ? OFFSET ?"
     ],
     "readableSql": [
-      "SELECT \"$W\".EMPLOYEE,\"$W\".ROLE \nFROM capdemo_WorkAssignments as \"$W\" \nWHERE \"$W\".EMPLOYEE = 'Alice'\n  AND \"$W\".validFrom <= '2026-06-21T06:10:47.508Z'\n  AND \"$W\".validTo > '2026-06-21T06:10:47.508Z' \nLIMIT 50 OFFSET 0"
+      "SELECT \"$W\".EMPLOYEE,\"$W\".ROLE \nFROM capdemo_WorkAssignments as \"$W\" \nWHERE \"$W\".EMPLOYEE = 'Alice'\n  AND \"$W\".validFrom <= '2026-06-22T02:39:08.276Z'\n  AND \"$W\".validTo > '2026-06-22T02:39:08.276Z' \nLIMIT 50 OFFSET 0"
     ],
     "rows": [
       {
         "EMPLOYEE": "Alice",
         "ROLE": "Senior Analyst"
+      }
+    ],
+    "error": null
+  },
+  {
+    "id": "new-16-expand-enum-two-levels",
+    "nl": "Order items with their product, including status text at both levels",
+    "descriptor": {
+      "entity": "Orders",
+      "select": [
+        "ID"
+      ],
+      "expand": [
+        {
+          "assoc": "items",
+          "select": [
+            "ID",
+            "STATUS"
+          ],
+          "expand": [
+            {
+              "assoc": "product",
+              "select": [
+                "ID",
+                "STATUS"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    "cqn": [
+      {
+        "SELECT": {
+          "from": {
+            "ref": [
+              "capdemo.Orders"
+            ]
+          },
+          "columns": [
+            {
+              "ref": [
+                "ID"
+              ]
+            },
+            {
+              "ref": [
+                "items"
+              ],
+              "expand": [
+                {
+                  "ref": [
+                    "ID"
+                  ]
+                },
+                {
+                  "ref": [
+                    "STATUS"
+                  ]
+                },
+                {
+                  "ref": [
+                    "product"
+                  ],
+                  "expand": [
+                    {
+                      "ref": [
+                        "ID"
+                      ]
+                    },
+                    {
+                      "ref": [
+                        "STATUS"
+                      ]
+                    }
+                  ]
+                }
+              ]
+            }
+          ],
+          "limit": {
+            "rows": {
+              "val": 50
+            },
+            "offset": {
+              "val": 0
+            }
+          }
+        }
+      }
+    ],
+    "sql": [
+      "SELECT \"$O\".ID,(SELECT jsonb_group_array(jsonb_insert('{}','$.\"ID\"',ID,'$.\"STATUS\"',STATUS,'$.\"product\"',product->'$')) as _json_ FROM (SELECT \"$i\".ID,\"$i\".STATUS,(SELECT json_insert('{}','$.\"ID\"',ID,'$.\"STATUS\"',STATUS) as _json_ FROM (SELECT \"$p\".ID,\"$p\".STATUS FROM capdemo_Products as \"$p\" WHERE \"$p\".ID = \"$i\".PRODUCT_ID LIMIT ?)) as product FROM capdemo_OrderItems as \"$i\" WHERE \"$i\".ORDER_ID = \"$O\".ID)) as items FROM capdemo_Orders as \"$O\" LIMIT ? OFFSET ?"
+    ],
+    "readableSql": [
+      "SELECT \"$O\".ID,(SELECT jsonb_group_array(jsonb_insert('{}','$.\"ID\"',ID,'$.\"STATUS\"',STATUS,'$.\"product\"',product->'$')) as _json_ \nFROM (SELECT \"$i\".ID,\"$i\".STATUS,(SELECT json_insert('{}','$.\"ID\"',ID,'$.\"STATUS\"',STATUS) as _json_ \nFROM (SELECT \"$p\".ID,\"$p\".STATUS \nFROM capdemo_Products as \"$p\" \nWHERE \"$p\".ID = \"$i\".PRODUCT_ID \nLIMIT 1)) as product \nFROM capdemo_OrderItems as \"$i\" \nWHERE \"$i\".ORDER_ID = \"$O\".ID)) as items \nFROM capdemo_Orders as \"$O\" \nLIMIT 50 OFFSET 0"
+    ],
+    "rows": [
+      {
+        "ID": "O1",
+        "items": [
+          {
+            "ID": "I1",
+            "STATUS": "S",
+            "product": {
+              "ID": "PR1",
+              "STATUS": "A",
+              "STATUS_text": "active"
+            },
+            "STATUS_text": "shipped"
+          },
+          {
+            "ID": "I2",
+            "STATUS": "P",
+            "product": {
+              "ID": "PR2",
+              "STATUS": "A",
+              "STATUS_text": "active"
+            },
+            "STATUS_text": "pending"
+          }
+        ]
+      },
+      {
+        "ID": "O2",
+        "items": [
+          {
+            "ID": "I3",
+            "STATUS": "S",
+            "product": {
+              "ID": "PR1",
+              "STATUS": "A",
+              "STATUS_text": "active"
+            },
+            "STATUS_text": "shipped"
+          }
+        ]
+      },
+      {
+        "ID": "O3",
+        "items": [
+          {
+            "ID": "I4",
+            "STATUS": "S",
+            "product": {
+              "ID": "PR3",
+              "STATUS": "D",
+              "STATUS_text": "discontinued"
+            },
+            "STATUS_text": "shipped"
+          }
+        ]
+      },
+      {
+        "ID": "O4",
+        "items": []
+      },
+      {
+        "ID": "O5",
+        "items": [
+          {
+            "ID": "I5",
+            "STATUS": "P",
+            "product": {
+              "ID": "PR1",
+              "STATUS": "A",
+              "STATUS_text": "active"
+            },
+            "STATUS_text": "pending"
+          }
+        ]
+      },
+      {
+        "ID": "O6",
+        "items": []
+      }
+    ],
+    "error": null
+  },
+  {
+    "id": "new-17-expand-blocked-columns-two-levels",
+    "nl": "Order items with their product, excluding the SECRET column at both levels",
+    "descriptor": {
+      "entity": "Orders",
+      "select": [
+        "ID"
+      ],
+      "expand": [
+        {
+          "assoc": "items",
+          "select": [
+            "ID",
+            "STATUS"
+          ],
+          "expand": [
+            {
+              "assoc": "product",
+              "select": [
+                "ID",
+                "NAME",
+                "SECRET",
+                "STATUS"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    "cqn": [
+      {
+        "SELECT": {
+          "from": {
+            "ref": [
+              "capdemo.Orders"
+            ]
+          },
+          "columns": [
+            {
+              "ref": [
+                "ID"
+              ]
+            },
+            {
+              "ref": [
+                "items"
+              ],
+              "expand": [
+                {
+                  "ref": [
+                    "ID"
+                  ]
+                },
+                {
+                  "ref": [
+                    "STATUS"
+                  ]
+                },
+                {
+                  "ref": [
+                    "product"
+                  ],
+                  "expand": [
+                    {
+                      "ref": [
+                        "ID"
+                      ]
+                    },
+                    {
+                      "ref": [
+                        "NAME"
+                      ]
+                    },
+                    {
+                      "ref": [
+                        "STATUS"
+                      ]
+                    }
+                  ]
+                }
+              ]
+            }
+          ],
+          "limit": {
+            "rows": {
+              "val": 50
+            },
+            "offset": {
+              "val": 0
+            }
+          }
+        }
+      }
+    ],
+    "sql": [
+      "SELECT \"$O\".ID,(SELECT jsonb_group_array(jsonb_insert('{}','$.\"ID\"',ID,'$.\"STATUS\"',STATUS,'$.\"product\"',product->'$')) as _json_ FROM (SELECT \"$i\".ID,\"$i\".STATUS,(SELECT json_insert('{}','$.\"ID\"',ID,'$.\"NAME\"',NAME,'$.\"STATUS\"',STATUS) as _json_ FROM (SELECT \"$p\".ID,\"$p\".NAME,\"$p\".STATUS FROM capdemo_Products as \"$p\" WHERE \"$p\".ID = \"$i\".PRODUCT_ID LIMIT ?)) as product FROM capdemo_OrderItems as \"$i\" WHERE \"$i\".ORDER_ID = \"$O\".ID)) as items FROM capdemo_Orders as \"$O\" LIMIT ? OFFSET ?"
+    ],
+    "readableSql": [
+      "SELECT \"$O\".ID,(SELECT jsonb_group_array(jsonb_insert('{}','$.\"ID\"',ID,'$.\"STATUS\"',STATUS,'$.\"product\"',product->'$')) as _json_ \nFROM (SELECT \"$i\".ID,\"$i\".STATUS,(SELECT json_insert('{}','$.\"ID\"',ID,'$.\"NAME\"',NAME,'$.\"STATUS\"',STATUS) as _json_ \nFROM (SELECT \"$p\".ID,\"$p\".NAME,\"$p\".STATUS \nFROM capdemo_Products as \"$p\" \nWHERE \"$p\".ID = \"$i\".PRODUCT_ID \nLIMIT 1)) as product \nFROM capdemo_OrderItems as \"$i\" \nWHERE \"$i\".ORDER_ID = \"$O\".ID)) as items \nFROM capdemo_Orders as \"$O\" \nLIMIT 50 OFFSET 0"
+    ],
+    "rows": [
+      {
+        "ID": "O1",
+        "items": [
+          {
+            "ID": "I1",
+            "STATUS": "S",
+            "product": {
+              "ID": "PR1",
+              "NAME": "Widget",
+              "STATUS": "A",
+              "STATUS_text": "active"
+            },
+            "STATUS_text": "shipped"
+          },
+          {
+            "ID": "I2",
+            "STATUS": "P",
+            "product": {
+              "ID": "PR2",
+              "NAME": "Gadget",
+              "STATUS": "A",
+              "STATUS_text": "active"
+            },
+            "STATUS_text": "pending"
+          }
+        ]
+      },
+      {
+        "ID": "O2",
+        "items": [
+          {
+            "ID": "I3",
+            "STATUS": "S",
+            "product": {
+              "ID": "PR1",
+              "NAME": "Widget",
+              "STATUS": "A",
+              "STATUS_text": "active"
+            },
+            "STATUS_text": "shipped"
+          }
+        ]
+      },
+      {
+        "ID": "O3",
+        "items": [
+          {
+            "ID": "I4",
+            "STATUS": "S",
+            "product": {
+              "ID": "PR3",
+              "NAME": "Gizmo",
+              "STATUS": "D",
+              "STATUS_text": "discontinued"
+            },
+            "STATUS_text": "shipped"
+          }
+        ]
+      },
+      {
+        "ID": "O4",
+        "items": []
+      },
+      {
+        "ID": "O5",
+        "items": [
+          {
+            "ID": "I5",
+            "STATUS": "P",
+            "product": {
+              "ID": "PR1",
+              "NAME": "Widget",
+              "STATUS": "A",
+              "STATUS_text": "active"
+            },
+            "STATUS_text": "pending"
+          }
+        ]
+      },
+      {
+        "ID": "O6",
+        "items": []
+      }
+    ],
+    "error": null
+  },
+  {
+    "id": "new-18-expand-orderby-limit-top-n-per-group",
+    "nl": "Each order's single largest line item by quantity",
+    "descriptor": {
+      "entity": "Orders",
+      "select": [
+        "ID"
+      ],
+      "expand": [
+        {
+          "assoc": "items",
+          "select": [
+            "ID",
+            "PRODUCT",
+            "QTY"
+          ],
+          "orderBy": "QTY",
+          "orderDir": "DESC",
+          "limit": 1
+        }
+      ]
+    },
+    "cqn": [
+      {
+        "SELECT": {
+          "from": {
+            "ref": [
+              "capdemo.Orders"
+            ]
+          },
+          "columns": [
+            {
+              "ref": [
+                "ID"
+              ]
+            },
+            {
+              "ref": [
+                "items"
+              ],
+              "expand": [
+                {
+                  "ref": [
+                    "ID"
+                  ]
+                },
+                {
+                  "ref": [
+                    "PRODUCT"
+                  ]
+                },
+                {
+                  "ref": [
+                    "QTY"
+                  ]
+                }
+              ]
+            }
+          ],
+          "limit": {
+            "rows": {
+              "val": 50
+            },
+            "offset": {
+              "val": 0
+            }
+          }
+        }
+      }
+    ],
+    "sql": [
+      "SELECT \"$O\".ID,(SELECT jsonb_group_array(jsonb_insert('{}','$.\"ID\"',ID,'$.\"PRODUCT\"',PRODUCT,'$.\"QTY\"',QTY)) as _json_ FROM (SELECT \"$i\".ID,\"$i\".PRODUCT,\"$i\".QTY FROM capdemo_OrderItems as \"$i\" WHERE \"$i\".ORDER_ID = \"$O\".ID)) as items FROM capdemo_Orders as \"$O\" LIMIT ? OFFSET ?"
+    ],
+    "readableSql": [
+      "SELECT \"$O\".ID,(SELECT jsonb_group_array(jsonb_insert('{}','$.\"ID\"',ID,'$.\"PRODUCT\"',PRODUCT,'$.\"QTY\"',QTY)) as _json_ \nFROM (SELECT \"$i\".ID,\"$i\".PRODUCT,\"$i\".QTY \nFROM capdemo_OrderItems as \"$i\" \nWHERE \"$i\".ORDER_ID = \"$O\".ID)) as items \nFROM capdemo_Orders as \"$O\" \nLIMIT 50 OFFSET 0"
+    ],
+    "rows": [
+      {
+        "ID": "O1",
+        "items": [
+          {
+            "ID": "I1",
+            "PRODUCT": "Widget",
+            "QTY": 10
+          }
+        ]
+      },
+      {
+        "ID": "O2",
+        "items": [
+          {
+            "ID": "I3",
+            "PRODUCT": "Widget",
+            "QTY": 20
+          }
+        ]
+      },
+      {
+        "ID": "O3",
+        "items": [
+          {
+            "ID": "I4",
+            "PRODUCT": "Gizmo",
+            "QTY": 3
+          }
+        ]
+      },
+      {
+        "ID": "O4",
+        "items": []
+      },
+      {
+        "ID": "O5",
+        "items": [
+          {
+            "ID": "I5",
+            "PRODUCT": "Widget",
+            "QTY": 1
+          }
+        ]
+      },
+      {
+        "ID": "O6",
+        "items": []
+      }
+    ],
+    "error": null
+  },
+  {
+    "id": "new-19-hierarchy-enum-translation",
+    "nl": "All descendants of account A1, including their status text",
+    "descriptor": {
+      "entity": "Accounts",
+      "select": [
+        "ID",
+        "NAME",
+        "STATUS"
+      ],
+      "hierarchy": {
+        "assoc": "children",
+        "direction": "descendants",
+        "startWhere": [
+          {
+            "col": "ID",
+            "op": "=",
+            "val": "A1"
+          }
+        ]
+      }
+    },
+    "cqn": [
+      {
+        "SELECT": {
+          "from": {
+            "ref": [
+              "capdemo.Accounts"
+            ]
+          },
+          "columns": [
+            {
+              "ref": [
+                "ID"
+              ]
+            },
+            {
+              "ref": [
+                "PARENT_ID"
+              ]
+            },
+            {
+              "ref": [
+                "NAME"
+              ]
+            },
+            {
+              "ref": [
+                "STATUS"
+              ]
+            }
+          ],
+          "where": [
+            {
+              "ref": [
+                "ID"
+              ]
+            },
+            "=",
+            {
+              "val": "A1"
+            }
+          ],
+          "limit": {
+            "rows": {
+              "val": 51
+            }
+          }
+        }
+      },
+      {
+        "SELECT": {
+          "from": {
+            "ref": [
+              "capdemo.Accounts"
+            ]
+          },
+          "columns": [
+            {
+              "ref": [
+                "ID"
+              ]
+            },
+            {
+              "ref": [
+                "PARENT_ID"
+              ]
+            },
+            {
+              "ref": [
+                "NAME"
+              ]
+            },
+            {
+              "ref": [
+                "STATUS"
+              ]
+            }
+          ],
+          "where": [
+            {
+              "ref": [
+                "PARENT_ID"
+              ]
+            },
+            "in",
+            {
+              "list": [
+                {
+                  "val": "A1"
+                }
+              ]
+            }
+          ],
+          "limit": {
+            "rows": {
+              "val": 50
+            }
+          }
+        }
+      },
+      {
+        "SELECT": {
+          "from": {
+            "ref": [
+              "capdemo.Accounts"
+            ]
+          },
+          "columns": [
+            {
+              "ref": [
+                "ID"
+              ]
+            },
+            {
+              "ref": [
+                "PARENT_ID"
+              ]
+            },
+            {
+              "ref": [
+                "NAME"
+              ]
+            },
+            {
+              "ref": [
+                "STATUS"
+              ]
+            }
+          ],
+          "where": [
+            {
+              "ref": [
+                "PARENT_ID"
+              ]
+            },
+            "in",
+            {
+              "list": [
+                {
+                  "val": "A2"
+                }
+              ]
+            }
+          ],
+          "limit": {
+            "rows": {
+              "val": 49
+            }
+          }
+        }
+      },
+      {
+        "SELECT": {
+          "from": {
+            "ref": [
+              "capdemo.Accounts"
+            ]
+          },
+          "columns": [
+            {
+              "ref": [
+                "ID"
+              ]
+            },
+            {
+              "ref": [
+                "PARENT_ID"
+              ]
+            },
+            {
+              "ref": [
+                "NAME"
+              ]
+            },
+            {
+              "ref": [
+                "STATUS"
+              ]
+            }
+          ],
+          "where": [
+            {
+              "ref": [
+                "PARENT_ID"
+              ]
+            },
+            "in",
+            {
+              "list": [
+                {
+                  "val": "A3"
+                },
+                {
+                  "val": "A4"
+                }
+              ]
+            }
+          ],
+          "limit": {
+            "rows": {
+              "val": 47
+            }
+          }
+        }
+      },
+      {
+        "SELECT": {
+          "from": {
+            "ref": [
+              "capdemo.Accounts"
+            ]
+          },
+          "columns": [
+            {
+              "ref": [
+                "ID"
+              ]
+            },
+            {
+              "ref": [
+                "PARENT_ID"
+              ]
+            },
+            {
+              "ref": [
+                "NAME"
+              ]
+            },
+            {
+              "ref": [
+                "STATUS"
+              ]
+            }
+          ],
+          "where": [
+            {
+              "ref": [
+                "PARENT_ID"
+              ]
+            },
+            "in",
+            {
+              "list": [
+                {
+                  "val": "A5"
+                }
+              ]
+            }
+          ],
+          "limit": {
+            "rows": {
+              "val": 46
+            }
+          }
+        }
+      }
+    ],
+    "sql": [
+      "SELECT \"$A\".ID,\"$A\".PARENT_ID,\"$A\".NAME,\"$A\".STATUS FROM capdemo_Accounts as \"$A\" WHERE \"$A\".ID = ? LIMIT ?",
+      "SELECT \"$A\".ID,\"$A\".PARENT_ID,\"$A\".NAME,\"$A\".STATUS FROM capdemo_Accounts as \"$A\" WHERE \"$A\".PARENT_ID in (?) LIMIT ?",
+      "SELECT \"$A\".ID,\"$A\".PARENT_ID,\"$A\".NAME,\"$A\".STATUS FROM capdemo_Accounts as \"$A\" WHERE \"$A\".PARENT_ID in (?) LIMIT ?",
+      "SELECT \"$A\".ID,\"$A\".PARENT_ID,\"$A\".NAME,\"$A\".STATUS FROM capdemo_Accounts as \"$A\" WHERE \"$A\".PARENT_ID in (?,?) LIMIT ?",
+      "SELECT \"$A\".ID,\"$A\".PARENT_ID,\"$A\".NAME,\"$A\".STATUS FROM capdemo_Accounts as \"$A\" WHERE \"$A\".PARENT_ID in (?) LIMIT ?"
+    ],
+    "readableSql": [
+      "SELECT \"$A\".ID,\"$A\".PARENT_ID,\"$A\".NAME,\"$A\".STATUS \nFROM capdemo_Accounts as \"$A\" \nWHERE \"$A\".ID = 'A1' \nLIMIT 51",
+      "SELECT \"$A\".ID,\"$A\".PARENT_ID,\"$A\".NAME,\"$A\".STATUS \nFROM capdemo_Accounts as \"$A\" \nWHERE \"$A\".PARENT_ID in ('A1') \nLIMIT 50",
+      "SELECT \"$A\".ID,\"$A\".PARENT_ID,\"$A\".NAME,\"$A\".STATUS \nFROM capdemo_Accounts as \"$A\" \nWHERE \"$A\".PARENT_ID in ('A2') \nLIMIT 49",
+      "SELECT \"$A\".ID,\"$A\".PARENT_ID,\"$A\".NAME,\"$A\".STATUS \nFROM capdemo_Accounts as \"$A\" \nWHERE \"$A\".PARENT_ID in ('A3','A4') \nLIMIT 47",
+      "SELECT \"$A\".ID,\"$A\".PARENT_ID,\"$A\".NAME,\"$A\".STATUS \nFROM capdemo_Accounts as \"$A\" \nWHERE \"$A\".PARENT_ID in ('A5') \nLIMIT 46"
+    ],
+    "rows": [
+      {
+        "ID": "A1",
+        "NAME": "Holding Co",
+        "STATUS": "A",
+        "STATUS_text": "active"
+      },
+      {
+        "ID": "A2",
+        "NAME": "Regional Division",
+        "STATUS": "A",
+        "STATUS_text": "active"
+      },
+      {
+        "ID": "A3",
+        "NAME": "Local Branch North",
+        "STATUS": "A",
+        "STATUS_text": "active"
+      },
+      {
+        "ID": "A4",
+        "NAME": "Local Branch South",
+        "STATUS": "X",
+        "STATUS_text": "closed"
+      },
+      {
+        "ID": "A5",
+        "NAME": "Sub Branch North-1",
+        "STATUS": "A",
+        "STATUS_text": "active"
       }
     ],
     "error": null

@@ -298,4 +298,63 @@ module.exports = [
       where: [{ col: 'EMPLOYEE', op: '=', val: 'Alice' }],
     },
   },
+
+  // ── Systematic post-processing-recursion coverage (added after auditing every
+  // JS post-fetch step for the same gap an earlier expand "orderBy" bug had: each
+  // one originally only ever walked the TOP-LEVEL row, or only Array.isArray()
+  // expand children, silently no-op'ing on anything deeper or to-one-shaped) ──
+
+  {
+    id: 'new-16-expand-enum-two-levels',
+    nl: 'Order items with their product, including status text at both levels',
+    descriptor: {
+      entity: 'Orders',
+      select: ['ID'],
+      expand: [{
+        assoc: 'items', select: ['ID', 'STATUS'],
+        expand: [{ assoc: 'product', select: ['ID', 'STATUS'] }],
+      }],
+    },
+  },
+  {
+    id: 'new-17-expand-blocked-columns-two-levels',
+    nl: 'Order items with their product, excluding the SECRET column at both levels',
+    descriptor: {
+      entity: 'Orders',
+      select: ['ID'],
+      expand: [{
+        assoc: 'items', select: ['ID', 'STATUS'],
+        expand: [{ assoc: 'product', select: ['ID', 'NAME', 'SECRET', 'STATUS'] }],
+      }],
+    },
+    // Products.SECRET only exists at the level-2 (product) entity in this schema —
+    // OrderItems has no SECRET column — so this exercises the to-one branch
+    // specifically, which is the shape the original bug missed entirely.
+    // (Explicit select, not null/"all columns" — null at 2 nested levels hits an
+    // unrelated @cap-js/sqlite-internal "malformed JSON" error confirmed specific
+    // to that test-only SQLite adapter; verified directly against live BTP HANA
+    // with @cap-js/hana that select:null + this same blockedColumns config works
+    // correctly there. Using explicit select here so the SQLite-based golden
+    // reference can still be generated, without losing real coverage of the
+    // thing this entry actually tests — blocked-column stripping at depth 2.)
+    callConfig: { blockedColumns: ['SECRET'] },
+  },
+  {
+    id: 'new-18-expand-orderby-limit-top-n-per-group',
+    nl: "Each order's single largest line item by quantity",
+    descriptor: {
+      entity: 'Orders',
+      select: ['ID'],
+      expand: [{ assoc: 'items', select: ['ID', 'PRODUCT', 'QTY'], orderBy: 'QTY', orderDir: 'DESC', limit: 1 }],
+    },
+  },
+  {
+    id: 'new-19-hierarchy-enum-translation',
+    nl: 'All descendants of account A1, including their status text',
+    descriptor: {
+      entity: 'Accounts',
+      select: ['ID', 'NAME', 'STATUS'],
+      hierarchy: { assoc: 'children', direction: 'descendants', startWhere: [{ col: 'ID', op: '=', val: 'A1' }] },
+    },
+  },
 ];

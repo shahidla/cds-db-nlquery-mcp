@@ -40,7 +40,10 @@ const schema = {
   },
   Products: {
     key: 'ID', fqn: 'app.Products',
-    columns: { ID: { type: 'String' }, NAME: { type: 'String' } },
+    columns: {
+      ID: { type: 'String' }, NAME: { type: 'String' }, SECRET: { type: 'String' },
+      STATUS: { type: 'String', enum: { A: 'active', D: 'discontinued' } },
+    },
     joins: {},
   },
   Parts: {
@@ -50,7 +53,10 @@ const schema = {
   },
   Accounts: {
     key: 'ID', fqn: 'app.Accounts',
-    columns: { ID: { type: 'String' }, NAME: { type: 'String' }, PARENT_ID: { type: 'String' } },
+    columns: {
+      ID: { type: 'String' }, NAME: { type: 'String' }, PARENT_ID: { type: 'String' }, SECRET: { type: 'String' },
+      STATUS: { type: 'String', enum: { A: 'active', X: 'closed' } },
+    },
     joins: {
       parent:   { entity: 'Accounts', from: 'PARENT_ID', to: 'ID', type: 'INNER', toMany: false, recursive: true },
       children: { entity: 'Accounts', from: 'ID', to: 'PARENT_ID', type: 'LEFT', toMany: true, recursive: true },
@@ -542,6 +548,56 @@ test('nested expand is allowed when the nested association is to-one', async () 
   }
 });
 
+test('2-level nested expand: enum-to-text translation recurses through BOTH levels', async () => {
+  // The recursive applyEnumTranslation must walk arbitrarily deep, not just one
+  // level — Items.STATUS (level 1) AND Products.STATUS (level 2, reached via the
+  // to-many -> to-one nesting the test above confirms is allowed) must both get
+  // their _text sibling in the same query.
+  const mock = mockRunSequence([[
+    {
+      ID: 'O1',
+      items: [{ ID: 'I1', STATUS: 'O', productRef: { ID: 'P1', STATUS: 'A' } }],
+    },
+  ]]);
+  try {
+    const rows = await executeDescriptor(
+      {
+        entity: 'Orders', select: ['ID'],
+        expand: [{ assoc: 'items', select: ['ID', 'STATUS'], expand: [{ assoc: 'productRef', select: ['ID', 'STATUS'] }] }],
+      },
+      schema, {}
+    );
+    assert.deepEqual(rows[0].items, [{
+      ID: 'I1', STATUS: 'O', STATUS_text: 'open',
+      productRef: { ID: 'P1', STATUS: 'A', STATUS_text: 'active' },
+    }]);
+  } finally {
+    mock.restore();
+  }
+});
+
+test('2-level nested expand: blocked columns are stripped at BOTH levels', async () => {
+  const mock = mockRunSequence([[
+    {
+      ID: 'O1',
+      items: [{ ID: 'I1', SECRET: 'leak1', productRef: { ID: 'P1', SECRET: 'leak2' } }],
+    },
+  ]]);
+  try {
+    const rows = await executeDescriptor(
+      {
+        entity: 'Orders', select: ['ID'],
+        expand: [{ assoc: 'items', select: null, expand: [{ assoc: 'productRef', select: null }] }],
+      },
+      schema, { blockedColumns: ['SECRET'] }
+    );
+    assert.ok(!('SECRET' in rows[0].items[0]), 'level-1 SECRET must be stripped');
+    assert.ok(!('SECRET' in rows[0].items[0].productRef), 'level-2 SECRET must also be stripped');
+  } finally {
+    mock.restore();
+  }
+});
+
 test('nested expand is rejected when both levels are to-many', async () => {
   await assert.rejects(
     () => executeDescriptor(
@@ -769,6 +825,57 @@ test('hierarchy: descendants walks the tree level by level until empty', async (
       { ID: 'A3', NAME: 'Sub2' },
     ]);
     assert.equal(mock.calls.length, 3);
+  } finally {
+    mock.restore();
+  }
+});
+
+test('hierarchy: enum-to-text translation is applied (found by auditing every return path for the same gap "expand" had)', async () => {
+  // "hierarchy" has its own early-return path entirely separate from the main
+  // pipeline (cds.run -> truncateExpandRows -> applyEnumTranslation -> strip) — it
+  // never went through applyEnumTranslation at all, so STATUS would never have
+  // gotten its _text sibling here even though the exact same column does on a
+  // plain (non-hierarchy) query against Accounts.
+  const mock = mockRunSequence([
+    [{ ID: 'A1', NAME: 'Region-North', STATUS: 'A' }],
+    [],
+  ]);
+  try {
+    const rows = await executeDescriptor(
+      {
+        entity: 'Accounts',
+        hierarchy: { assoc: 'children', direction: 'descendants', startWhere: [{ col: 'NAME', op: '=', val: 'Region-North' }] },
+        select: ['ID', 'NAME', 'STATUS'],
+      },
+      schema, {}
+    );
+    assert.deepEqual(rows, [{ ID: 'A1', NAME: 'Region-North', STATUS: 'A', STATUS_text: 'active' }]);
+  } finally {
+    mock.restore();
+  }
+});
+
+test('hierarchy: blocked columns are never selected, even with no explicit select', async () => {
+  // Different mechanism than expand's belt-and-suspenders strip: hierarchy filters
+  // allBlocked out of effectiveSelect BEFORE building the query (the column is
+  // never fetched at all), so there's nothing to strip after the fact. Confirms
+  // that source-level filtering — not a missing post-fetch step — is genuinely
+  // sufficient here.
+  const mock = mockRunSequence([
+    [{ ID: 'A1', NAME: 'Region-North' }], // DB call only returns non-blocked cols requested
+    [],
+  ]);
+  try {
+    const rows = await executeDescriptor(
+      {
+        entity: 'Accounts',
+        hierarchy: { assoc: 'children', direction: 'descendants', startWhere: [{ col: 'NAME', op: '=', val: 'Region-North' }] },
+      },
+      schema, { blockedColumns: ['SECRET'] }
+    );
+    assert.ok(!('SECRET' in rows[0]));
+    const selectedCols = mock.calls[0].SELECT.columns.map(c => c.ref[0]);
+    assert.ok(!selectedCols.includes('SECRET'), 'SECRET must never even be requested from the DB');
   } finally {
     mock.restore();
   }

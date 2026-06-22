@@ -468,19 +468,34 @@ function compareForSort(a, b) {
 // has to happen here, in JS, rather than in the query) — sort BEFORE truncating,
 // so "single largest order per customer" (orderBy DESC + limit 1) actually keeps
 // the largest one instead of an arbitrary row that happened to come back first.
+// A to-many expand child comes back as an array; a to-one expand child (e.g.
+// "items" -> "productRef") comes back as a plain object — found via systematic
+// testing after the first round of expand-recursion fixes only ever checked
+// Array.isArray(), silently skipping every to-one branch entirely (no crash, no
+// rows touched, every one of these post-processing steps just no-op'd on it).
+// Both recursive helpers below normalize a to-one object into a 1-element array,
+// recurse the same way, then unwrap — same logic either shape, no duplication.
+function isPlainNested(v) {
+  return v != null && typeof v === 'object' && !Array.isArray(v);
+}
+
 function truncateExpandRows(rows, expandList, maxExpandRows) {
   if (!expandList?.length) return rows;
   for (const row of rows) {
     for (const node of expandList) {
-      const cap = Math.min(node.limit || maxExpandRows, maxExpandRows);
       const nested = row[node.assoc];
       if (Array.isArray(nested)) {
+        const cap = Math.min(node.limit || maxExpandRows, maxExpandRows);
         if (node.orderBy) {
           const dir = (node.orderDir || 'ASC').toUpperCase() === 'DESC' ? -1 : 1;
           nested.sort((a, b) => dir * compareForSort(a[node.orderBy], b[node.orderBy]));
         }
         if (nested.length > cap) nested.length = cap;
         if (node.expand?.length) truncateExpandRows(nested, node.expand, maxExpandRows);
+      } else if (isPlainNested(nested) && node.expand?.length) {
+        // A to-one branch never needs a row cap/order (it's a single object) —
+        // just recurse into ITS OWN further-nested expand, if any.
+        truncateExpandRows([nested], node.expand, maxExpandRows);
       }
     }
   }
@@ -507,8 +522,11 @@ function applyEnumTranslation(rows, entityDef, expandList, schema) {
     const out = applyEnumToRow(row, entityDef);
     for (const node of expandList || []) {
       const targetDef = schema[entityDef.joins[node.assoc].entity];
-      if (Array.isArray(out[node.assoc])) {
-        out[node.assoc] = applyEnumTranslation(out[node.assoc], targetDef, node.expand, schema);
+      const nested = out[node.assoc];
+      if (Array.isArray(nested)) {
+        out[node.assoc] = applyEnumTranslation(nested, targetDef, node.expand, schema);
+      } else if (isPlainNested(nested)) {
+        out[node.assoc] = applyEnumTranslation([nested], targetDef, node.expand, schema)[0];
       }
     }
     return out;
@@ -597,10 +615,18 @@ async function executeHierarchy(hierarchy, entityDef, schema, select, allBlocked
     depth++;
   }
 
+  // "hierarchy" has its own return path, entirely separate from the main pipeline
+  // below (cds.run -> truncateExpandRows -> applyEnumTranslation -> strip) — found
+  // by auditing every return path for the same gap the expand bugs had, rather than
+  // waiting to stumble onto it via another NL question. Blocked columns are already
+  // handled (effectiveSelect never included them, so there's nothing to strip), but
+  // enum-to-text was missing entirely. "hierarchy" can't be combined with "expand"
+  // (validated earlier in this function), so the single-row applyEnumToRow is
+  // correct here — no nested arrays to recurse into.
   return collected.slice(0, effectiveLimit).map(row => {
     const out = {};
     for (const c of effectiveSelect) out[c] = row[c];
-    return out;
+    return applyEnumToRow(out, entityDef);
   });
 }
 
@@ -1018,8 +1044,11 @@ function stripBlockedFromRows(rows, allBlocked, expandList) {
     const out = { ...row };
     for (const col of allBlocked) delete out[col];
     for (const node of expandList || []) {
-      if (Array.isArray(out[node.assoc])) {
-        out[node.assoc] = stripBlockedFromRows(out[node.assoc], allBlocked, node.expand);
+      const nested = out[node.assoc];
+      if (Array.isArray(nested)) {
+        out[node.assoc] = stripBlockedFromRows(nested, allBlocked, node.expand);
+      } else if (isPlainNested(nested)) {
+        out[node.assoc] = stripBlockedFromRows([nested], allBlocked, node.expand)[0];
       }
     }
     return out;

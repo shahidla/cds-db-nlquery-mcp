@@ -1,6 +1,6 @@
-ID,NAME,PARENT_ID
-A1,Holding Co,
-A2,Regional Division,A1
-A3,Local Branch North,A2
-A4,Local Branch South,A2
-A5,Sub Branch North-1,A3
+ID,NAME,PARENT_ID,STATUS
+A1,Holding Co,,A
+A2,Regional Division,A1,A
+A3,Local Branch North,A2,A
+A4,Local Branch South,A2,X
+A5,Sub Branch North-1,A3,A
