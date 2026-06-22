@@ -862,6 +862,23 @@ async function executeDescriptor(descriptor, schema, callConfig = {}) {
         throw new Error(`"windowFilter" column "${cond.col}" must reference a declared "window" alias.`);
       }
     }
+    // Found via real NL testing: a top-level "orderBy" with an association path
+    // (e.g. "customer.NAME") crashes with "customer not found in the elements of
+    // undefined" the moment "windowFilter" is present. Root cause confirmed via a
+    // minimal direct repro (isolated from any LLM involvement): "windowFilter"
+    // wraps the query in an outer SELECT.from(innerQuery) — a derived-table query
+    // whose "entity" is the inner subquery, not a real schema entity, so it has no
+    // association metadata left to resolve a path against. A plain-column orderBy
+    // works fine (confirmed in the same repro); only a path breaks. Reject with a
+    // workaround instead of letting the cryptic internal error surface.
+    if (orderBy?.includes('.')) {
+      throw new Error(
+        `"orderBy" cannot be an association path ("${orderBy}") when "windowFilter" is present — ` +
+        `the windowFilter wrapper loses the original entity's association context. ` +
+        `Select that column explicitly with an alias (e.g. {"col": "${orderBy}", "as": "sort_col"}) ` +
+        `and orderBy the alias ("sort_col") instead.`
+      );
+    }
   }
 
   // Enforce the allowlist on entities reached via association-path joins too —

@@ -1204,6 +1204,25 @@ test('windowFilter requires "window" and a declared alias', async () => {
   );
 });
 
+test('windowFilter + a path-valued top-level orderBy is rejected (confirmed broken against real HANA)', async () => {
+  // The windowFilter wrapper (SELECT.from(innerQuery)) has no association metadata
+  // left to resolve a path against — confirmed via a minimal direct repro: the
+  // identical query with a PLAIN-column orderBy works fine, only a path breaks,
+  // with "customer not found in the elements of undefined".
+  await assert.rejects(
+    () => executeDescriptor(
+      {
+        entity: 'Orders', select: ['ID', 'AMOUNT', 'CUSTOMER_ID'],
+        window: [{ fn: 'row_number', as: 'rn', partitionBy: ['CUSTOMER_ID'], orderBy: [{ col: 'AMOUNT', dir: 'DESC' }] }],
+        windowFilter: [{ col: 'rn', op: '<=', val: 1 }],
+        orderBy: 'customer.NAME', orderDir: 'ASC',
+      },
+      schema, {}
+    ),
+    /"orderBy" cannot be an association path.*windowFilter/
+  );
+});
+
 test('orderBy applies to the outer query when windowFilter wraps the SELECT', async () => {
   const capture = captureQuery();
   try {

@@ -157,6 +157,11 @@ WINDOW FUNCTIONS (ranking, "top N per group", running totals — different from 
   - Do not use "window" for a simple "top N overall" question (no PARTITION BY implied) —
     that's just "orderBy" + "limit", unchanged.
   - "window" cannot be combined with "aggregate"/"groupBy"/"having"/"expand".
+  - When "windowFilter" is present, the top-level "orderBy" (if you also want the final
+    result sorted) must be a PLAIN column, never an association path — confirmed against
+    real HANA: a path-valued orderBy crashes once windowFilter is involved. If you need to
+    sort by a joined column (e.g. customer name) in this case, select it explicitly with an
+    alias ({"col": "customer.NAME", "as": "customer_name"}) and orderBy the alias instead.
 
 COMPUTED LABELS (CASE WHEN):
   - Use "caseWhen" to turn a numeric/coded column into a business-readable label inline,
