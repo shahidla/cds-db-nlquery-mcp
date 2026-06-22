@@ -1,6 +1,6 @@
 {
   "name": "@shahid.la/cds-db-nlquery-mcp",
-  "version": "0.6.0",
+  "version": "0.7.0",
   "description": "MCP server for natural language queries against CDS db-layer entities. Targets raw db/schema.cds entities via cds.run() with real SQL JOINs — bring your own LLM (Anthropic, OpenAI, or any OpenAI-compatible endpoint).",
   "main": "src/mcp-server.js",
   "bin": {
@@ -11,7 +11,9 @@
   ],
   "scripts": {
     "start": "node src/mcp-server.js",
-    "test": "node --test test/*.test.js"
+    "test": "node --test --test-concurrency=1 test/*.test.js",
+    "test:deployment": "node examples/capability-demo/validate-deployment.js",
+    "lint": "eslint ."
   },
   "keywords": [
     "mcp",
@@ -50,6 +52,8 @@
   },
   "devDependencies": {
     "@cap-js/sqlite": "^1.11.1",
-    "@sap/cds": "^8"
+    "@eslint/js": "^10.0.1",
+    "@sap/cds": "^8",
+    "eslint": "^10.5.0"
   }
 }

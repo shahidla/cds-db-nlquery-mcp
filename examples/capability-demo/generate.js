@@ -62,11 +62,16 @@ async function main() {
 
   for (const q of queries) {
     const entry = { id: q.id, nl: q.nl, descriptor: q.descriptor };
+    // Declared OUTSIDE the try block (not "const realRun" inside it) so the catch
+    // block below can actually see it — a try block's const/let declarations are
+    // not visible in its own catch block. This is exactly why the original code
+    // wrote the no-op `cds.run = cds.run` in catch instead of `cds.run = realRun`:
+    // that reference genuinely wasn't in scope there as originally structured.
+    const realRun = cds.run.bind(cds);
     try {
       // Capture every CQN query the executor issues for this descriptor (hierarchy
       // queries issue one per tree level) by intercepting cds.run.
       const capturedCqn = [];
-      const realRun = cds.run.bind(cds);
       cds.run = async (query) => { capturedCqn.push(query); return realRun(query); };
 
       const rows = await executeDescriptor(q.descriptor, schema, q.callConfig || {});
@@ -85,7 +90,14 @@ async function main() {
       entry.rows = rows;
       entry.error = null;
     } catch (e) {
-      cds.run = cds.run; // no-op; ensure restored even on throw path above
+      cds.run = realRun; // restore even on the throw path above — found via ESLint's
+      // no-self-assign rule: this was `cds.run = cds.run` (a no-op) instead, so any
+      // descriptor that threw left cds.run wrapped for every subsequent iteration —
+      // each one would then capture through a compounding chain of stale wrappers
+      // instead of the true original. No actual row-data corruption (each wrapper
+      // still delegates through to the real cds.run eventually), but the captured
+      // cqn/sql for later entries could include leftover capture-array references
+      // from earlier iterations. First real catch from adding lint to this repo.
       entry.cqn = null;
       entry.sql = null;
       entry.readableSql = null;

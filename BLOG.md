@@ -419,6 +419,103 @@ This is the example I'd point a skeptical architect to first. Plenty of "NL to S
 
 ---
 
+## Beyond Filters: Aggregation, Hierarchy, Nested Reads, Window Functions
+
+The three examples above were already true in earlier versions. Since then the
+descriptor format grew into a real query language — not by adding syntax for its
+own sake, but because each addition maps to a CQL capability CAP already
+supports and a real class of question:
+
+- **Aggregation** — `"aggregate": [{"fn":"sum","col":"AMOUNT","as":"total"}]` +
+  `"groupBy"` + `"having"` — "total order amount per customer," "customers with
+  more than 5 loans."
+- **Nested reads (`expand`)** — "show me each order with its line items nested
+  inside" returns one parent row per order with a real nested array, not a
+  flattened, duplicated-parent-row JOIN result.
+- **Recursive hierarchy** — `"hierarchy": {"assoc":"children","direction":"descendants"}`
+  walks an unbounded self-referencing tree (org charts, account hierarchies) level
+  by level, capped by a configurable max depth — something a fixed-depth
+  `a.b.c.COL` path genuinely cannot express.
+- **Window functions** — `rank`, `row_number`, running totals, lag/lead, all with
+  `partitionBy`/`orderBy` — "rank each order by amount within its customer,"
+  "each customer's single largest order."
+- **`CASE WHEN`, `UNION`/`INTERSECT`/`EXCEPT`, temporal `asOf` queries** — labeling
+  rows by a computed condition, combining two different entities into one result
+  set, and time-travel reads against `@cds.valid.from`/`@cds.valid.to` entities.
+
+Same architectural promise as before: the LLM picks which of these to use and
+fills in the JSON, CDS turns it into one real CQN query, the server never writes
+SQL by hand.
+
+---
+
+## Built by Testing Against Real HANA, Not Just an In-Memory Database
+
+Here's the part most "look what my MCP server can do" posts skip: a comprehensive
+unit test suite (123 tests) passed the entire time these capabilities were
+broken in a specific, real way. The tests used an in-memory SQLite-style adapter
+that tolerates things real HANA doesn't. The only way to actually know whether
+this worked was to deploy the demo schema to a real HANA Cloud instance and run
+every query against it for real — so that's what I did, repeatedly, across one
+extended session, and it caught real bugs:
+
+- A real NL question — "show me each customer's single largest order" —
+  surfaced that `expand`'s `orderBy`/`limit` (for "top N per group") wasn't
+  implemented at all: the row cap applied, but nothing sorted first, so the
+  result could silently be an arbitrary order instead of the actual largest
+  one. Fixed by sorting before truncating. That fix, plus the existing
+  enum-to-text translation and blocked-column stripping, all shared one
+  unexamined assumption: each only ever checked `Array.isArray()` on a nested
+  value. A follow-up systematic audit — deliberately constructing a two-level
+  `expand` test, not a natural-language question this time — found all three
+  silently skipped a nested value entirely whenever it was a plain object (a
+  `to-one` association) instead of an array.
+- A descriptor with an unrecognized field (an LLM wrote `{"notExists": "orders"}`
+  as a sibling of `"where"` instead of inside it) was silently ignored rather
+  than rejected — the query ran with no filter applied at all, returning every
+  row instead of failing loudly.
+- The legacy `@sap/hana-client`-based HANA runtime (still the default most
+  CAP+HANA projects use) silently drops the `OVER` clause from a window-function
+  query — no error, just wrong SQL, until HANA itself throws a syntax error
+  downstream. Confirmed the CQN this package generates is *correct* per CAP's
+  current standard (the same shape `@cap-js/sqlite` and the modern `@cap-js/hana`
+  adapter both render properly) — only the legacy runtime mishandles it. The
+  server now detects which adapter is connected and only restricts behavior on
+  the legacy one; on a modern adapter, the same query just works.
+
+Every one of these was found, root-caused, and fixed by actually deploying
+`examples/capability-demo/`'s schema to live HANA and running real queries
+against it — not by reading the code harder. The four scripts that do this
+live in that folder in the GitHub repo (they're development/testing tools, not
+part of the published npm package — `npm install` only gives you `src/`), ready
+to run, not just described:
+
+- `validate-deployment.js` — runs every example query directly against your
+  deployment and checks the results, no LLM involved.
+- `ask.js` — ask your own question against your deployment, end-to-end through
+  a real LLM.
+- `ask-batch.js` — runs every example question's *natural-language* text (not
+  the hand-written descriptor) through a real LLM and checks the result. This is
+  what actually separates "the package is wrong" from "the model picked an odd
+  column" — and it surfaced real, fixable mistakes in both categories, across
+  two different models (Claude and DeepSeek), not just one.
+- `smoke-test-server.js` — the other three call this package's internal
+  functions directly via `require()`. This one spawns `src/mcp-server.js` — the
+  actual published artifact — as a real child process and drives it through the
+  real MCP stdio protocol, the same way Claude Code or `npx` actually would.
+  Used this to chase down what looked like a real bug (a hierarchy query
+  silently falling back to a flat list, through this path specifically) — it
+  turned out to be a false alarm caused by incomplete debug logging in the
+  server itself, not an actual execution defect, but the only way to find that
+  out for certain was testing the real protocol path, not assuming the
+  internal-function tests covered it.
+
+If you're evaluating this for something that matters, don't take the examples
+above on faith — clone the repo, deploy `examples/capability-demo/` to your own
+HANA, and run these scripts yourself.
+
+---
+
 ## What Happens When the LLM Gets It Wrong
 
 All three examples above are success cases — worth being honest about the failure path too. If the LLM's response doesn't parse as JSON, or comes back without an `entity` field, the server rejects it outright rather than guessing or silently running a degraded query. The same applies to an entity or column outside `MCP_ALLOWED_ENTITIES`, or one that doesn't exist in your schema at all — each produces a clear error back to the MCP client, not a best-effort result you'd have to double-check. There's no fallback path that quietly does something different from what you asked.
@@ -427,11 +524,14 @@ All three examples above are success cases — worth being honest about the fail
 
 ## What Else the Server Reads From Your CDS Model
 
-Beyond `@title`/`@NLP.label` (covered above), three more things already in your schema do the rest of the work, none of them new:
+Beyond `@title`/`@NLP.label` (covered above), several more things already in your schema do the rest of the work, none of them new annotations you'd have to add just for this:
 
-- **Associations** — drive every JOIN; cardinality (`to-many` vs `to-one`) decides `LEFT` vs `INNER` automatically.
-- **`@Common.Text`** — the standard value-help pattern, reused so the LLM filters on human text instead of guessing codes.
-- **Enums** — native CDS `enum` values are surfaced to the LLM as `name="value"` pairs, and translated back (`STATUS_text`) in results.
+- **Associations** — drive every JOIN; cardinality (`to-many` vs `to-one`) decides `LEFT` vs `INNER` automatically, and which `expand`/`hierarchy` shapes are even valid.
+- **`@Common.Text` and `@Common.ValueList`** — the standard SAP value-help patterns, reused so the LLM filters on human text instead of guessing codes, whether it's a small fixed enum or a large lookup table.
+- **Native CDS `enum`** — surfaced to the LLM as `name="value"` pairs, and translated back (`STATUS_text`) automatically in every result row — including inside nested `expand` results, recursively.
+- **Calculated-on-read elements** (`FULL = FIRST || ' ' || LAST`) — selectable like any stored column; the server substitutes the underlying expression itself rather than assuming the database materialized it as a physical column (confirmed it doesn't, on HANA).
+- **`@assert.range`** — surfaced as a sanity-bound hint, so the LLM can catch a likely unit/scale mismatch (a 0–1 ratio vs. a 0–100 percentage) before it emits a filter that trivially returns zero rows.
+- **`@cds.search`** and **`@cds.valid.from`/`@cds.valid.to`** — free-text search columns and temporal entities, both read directly from annotations you'd already have for Fiori search bars and time-sliced data.
 
 This is why it doesn't feel like a generic SQL wrapper bolted onto your project: it's reading the same metadata your CDS model already carries for OData, Fiori value-help, and UI labels — just pointed at a different consumer.
 
@@ -458,6 +558,8 @@ npm install @shahid.la/cds-db-nlquery-mcp
 ```
 
 Add the `.mcp.json` block above, point it at a CAP project with a few `@NLP.label` annotations, and ask it something you'd otherwise have opened a SQL editor for. The first time a three-table JOIN with a coded value-help comes back correctly from a plain English question, you'll see why this is worth the five minutes of setup.
+
+Want to verify all of this yourself before trusting it with something that matters, rather than trusting this post? Clone the repo, deploy `examples/capability-demo/`'s schema to your own database, and run `validate-deployment.js`, `ask.js`, `ask-batch.js`, and `smoke-test-server.js` — the same scripts that found and confirmed every fix described above.
 
 Find the project on **[GitHub](https://github.com/shahidla/cds-db-nlquery-mcp)** and **[npm](https://www.npmjs.com/package/@shahid.la/cds-db-nlquery-mcp)**.
 

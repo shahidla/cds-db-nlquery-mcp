@@ -1,0 +1,93 @@
+=== validate-deployment.js (direct execution, no LLM) ===
+
+=== Validating 35 capability-demo queries against your deployment ===
+
+PASS  old-01-plain-where (2 rows) — "Show open orders for customer C1"
+PASS  old-02-aggregation-groupby (3 rows) — "Total order amount per customer"
+PASS  old-03-boolean-or-grouping (6 rows) — "Orders that are open or over 2000"
+PASS  old-04-exists-to-many (3 rows) — "Customers who have at least one open order"
+PASS  old-05-not-exists (1 rows) — "Customers who have never placed an order"
+PASS  old-06-pagination-offset (2 rows) — "Second page of orders, 2 per page, ordered by ID"
+PASS  old-07-valuelist-text-join (3 rows) — "Loans with their sector description"
+PASS  old-08-semantics-amount-currency-pair (6 rows) — "Order amounts with their currency"
+PASS  old-09-assert-range-outlier (1 rows) — "Loans with a debt-to-income ratio above the normal 0-50 range"
+PASS  old-10-cds-search (1 rows) — "Search customers for "acme""
+PASS  old-11-enum-text-translation (6 rows) — "Orders with their status (raw code and business term)"
+PASS  old-12-calculated-column (4 rows) — "Customers' full names"
+PASS  old-13-having (2 rows) — "Customers with more than 1 order"
+PASS  old-14-date-within-days (5 rows) — "Orders placed in the last 60 days (relative to today)"
+PASS  old-15-persistence-skip-rejected — correctly rejected: Unknown entity "InternalAudit". Known: Customers, Orders, OrderItems, Products, 
+PASS  new-01-hierarchy-descendants (5 rows) — "All descendants of account A1 (the full org tree below it)"
+PASS  new-02-hierarchy-ancestors (4 rows) — "The full ancestor chain above account A5"
+PASS  new-03-expand-composition (6 rows) — "Orders with their line items nested"
+PASS  new-04-via-filtered-aggregate (4 rows) — "Total amount of OPEN orders per customer (filtering inside the join, not the outer rows)"
+PASS  new-05-window-rank-per-partition (6 rows) — "Rank each order by amount within its customer (highest first)"
+PASS  new-06-window-filter-top-n-per-group (3 rows) — "Each customer's single largest order (top 1 per group)"
+PASS  new-07-window-running-total (6 rows) — "Running total of order amount per customer, ordered by date"
+PASS  new-08-hierarchy-rejects-non-recursive-assoc — correctly rejected: "customer" is not a self-referencing association — "hierarchy" requires one (see
+PASS  new-09-window-rejects-combo-with-aggregate — correctly rejected: "window" cannot be combined with aggregate, groupBy, having, or expand.
+PASS  new-10-case-when-label (6 rows) — "Orders labeled Large (over 2000) or Small"
+PASS  new-11-union-two-branches (2 rows) — "Customers named Acme Corp, plus customers with an order over 4000"
+PASS  new-12-intersect-two-branches (1 rows) — "Customers with an open order who also match the search term "Globex""
+PASS  new-13-except-two-branches (3 rows) — "All customers except those who have never placed an order"
+PASS  new-14-temporal-as-of-past (1 rows) — "What was Alice's role on 2026-02-15?"
+PASS  new-15-temporal-default-current (1 rows) — "What is Alice's current role?"
+PASS  new-16-expand-enum-two-levels (6 rows) — "Show me each order with its line items nested inside, and each line item with its product nested inside that — including the status text at both the item and product level"
+PASS  new-17-expand-blocked-columns-two-levels (6 rows) — "Show me each order with its line items nested inside, and each line item with its product nested inside that — excluding the SECRET column at both the item and product level"
+PASS  new-18-expand-orderby-limit-top-n-per-group (6 rows) — "For each order, nest just its single largest line item by quantity inside it — one order row each, with only the top line item nested inside"
+PASS  new-19-hierarchy-enum-translation (5 rows) — "All descendants of account A1, including their status text"
+PASS  new-20-expand-orderby-through-to-one-then-to-many (6 rows) — "For each order, nest that order's customer inside it, and nest that customer's single largest order (by amount, among all of that customer's orders) inside the customer"
+
+=== Summary: 35 passed, 0 failed, 0 known HANA limitations, 0 skipped (of 35) ===
+
+
+=== smoke-test-server.js (real MCP stdio protocol, real child process, Claude) ===
+[server] [cds-db-nlquery-mcp] Schema loaded — 8 entities
+[server] [cds-db-nlquery-mcp] WARNING: MCP_ALLOWED_ENTITIES not set — all entities are queryable. Set MCP_ALLOWED_ENTITIES in your .mcp.json env block for production use.
+[cds-db-nlquery-mcp] WARNING: MCP_DB_USER not set — using the project's default DB connection (likely the main app's full-access user). Set MCP_DB_USER/MCP_DB_PASSWORD to a restricted read-only user for production use.
+[cds-db-nlquery-mcp] LLM provider: anthropic
+[cds-db-nlquery-mcp] Ready (stdio)
+Connected to MCP server over stdio.
+
+Tools advertised: natural_language_query, list_entities
+
+--- "How many orders does each customer have, and what is the total amount?" ---
+[server] [cds-db-nlquery-mcp] ── Descriptor ──────────────────
+  entity : Orders
+  select : CUSTOMER_ID, customer.NAME
+  aggregate : [{"fn":"count","col":"*","as":"order_count"},{"fn":"sum","col":"AMOUNT","as":"total_amount"}]
+[server]   groupBy : CUSTOMER_ID, customer.NAME
+  order  : CUSTOMER_ID ASC
+  limit  : 50
+[cds-db-nlquery-mcp] ──────────────────────────────────
+[server] [cds-db-nlquery-mcp] → 3 rows returned
+IMPORTANT — formatting instructions for presenting the data below:
+1. Use a vertical "Field: value" list per record, one field per line. Do NOT use a markdown table — no "|" characters, no "|---|" separator rows.
+2. Every field shown below came directly from the query. Never say a value is "not provided" — if you cannot find a field you expected, it simply was not selected; do not claim it is missing from the data.
+3. If a field has a matching "<col>_text" key (e.g. STATUS and STATUS_text), show
+
+--- "Show me all descendants of account A1" ---
+[server] [cds-db-nlquery-mcp] ── Descriptor ──────────────────
+  entity : Accounts
+  hierarchy : {"assoc":"children","direction":"descendants","startWhere":[{"col":"ID","op":"=","val":"A1"}]}
+  limit  : 50
+[cds-db-nlquery-mcp] ──────────────────────────────────
+[server] [cds-db-nlquery-mcp] → 5 rows returned
+IMPORTANT — formatting instructions for presenting the data below:
+1. Use a vertical "Field: value" list per record, one field per line. Do NOT use a markdown table — no "|" characters, no "|---|" separator rows.
+2. Every field shown below came directly from the query. Never say a value is "not provided" — if you cannot find a field you expected, it simply was not selected; do not claim it is missing from the data.
+3. If a field has a matching "<col>_text" key (e.g. STATUS and STATUS_text), show
+
+--- "Show me each order with its line items nested inside" ---
+[server] [cds-db-nlquery-mcp] ── Descriptor ──────────────────
+  entity : Orders
+  expand : [{"assoc":"items","select":null}]
+  limit  : 50
+[server] [cds-db-nlquery-mcp] ──────────────────────────────────
+[server] [cds-db-nlquery-mcp] → 6 rows returned
+IMPORTANT — formatting instructions for presenting the data below:
+1. Use a vertical "Field: value" list per record, one field per line. Do NOT use a markdown table — no "|" characters, no "|---|" separator rows.
+2. Every field shown below came directly from the query. Never say a value is "not provided" — if you cannot find a field you expected, it simply was not selected; do not claim it is missing from the data.
+3. If a field has a matching "<col>_text" key (e.g. STATUS and STATUS_text), show
+
+All questions answered without error.

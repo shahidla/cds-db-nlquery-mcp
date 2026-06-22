@@ -46,6 +46,13 @@ npm install @shahid.la/cds-db-nlquery-mcp
 
 Set `cwd` to the absolute path of your CAP project root — where `db/schema.cds` lives. See [LLM provider](#llm-provider) for using OpenAI, Gemini, or another provider instead.
 
+`npx -y` re-resolves the package on every server start (from npm's cache once
+downloaded, not a fresh network fetch each time, but still an extra resolution
+step). If you've run `npm install @shahid.la/cds-db-nlquery-mcp` already, you
+can point `"command"` at the installed binary directly instead —
+`node_modules/.bin/cds-db-nlquery-mcp` — for a slightly more predictable startup,
+especially in production.
+
 **3. Open your project in Claude Code and ask a question**
 
 ```
@@ -54,16 +61,24 @@ Show me all open payments overdue by more than 30 days, include the borrower nam
 List all loans in the MINING sector with the customer's current DTI ratio.
 ```
 
-**Example response:**
+**Example response:** the server tells the client to render rows as a vertical
+field/value list, not a markdown table (real output, verified against a live
+deployment):
 
 ```
 Found 3 customers with DTI above 5:
 
-| PARTNER   | DTI_RATIO | BU_SORT1              |
-|-----------|-----------|------------------------|
-| 30100003  | 7.20      | Domestic Customer AU 3 |
-| 30100001  | 5.80      | Domestic Customer AU 1 |
-| 30100002  | 5.40      | Domestic Customer AU 2 |
+PARTNER    : 30100003
+DTI_RATIO  : 7.20
+BU_SORT1   : Domestic Customer AU 3
+
+PARTNER    : 30100001
+DTI_RATIO  : 5.80
+BU_SORT1   : Domestic Customer AU 1
+
+PARTNER    : 30100002
+DTI_RATIO  : 5.40
+BU_SORT1   : Domestic Customer AU 2
 ```
 
 ---
@@ -372,6 +387,42 @@ When the server starts, check the output panel in Claude Code:
 **`WARNING: No LLM provider configured`?** Set `ANTHROPIC_API_KEY` or `OPENAI_API_KEY` in the `.mcp.json` `env` block — see [LLM provider](#llm-provider).
 
 **`WARNING: MCP_DB_USER not set`?** Expected during development — the server is using the same database connection as your CAP app. Before production use, see [Security → Production](#production) for creating a dedicated read-only user.
+
+---
+
+## Testing this against your own deployment
+
+`npm install` gives you `src/` — the MCP server — and nothing else; that's the
+entire published package. The GitHub repository also has an
+`examples/capability-demo/` folder with a real CDS schema, seed data, ~35
+example queries with verified expected results, and four scripts to actually
+exercise them against your own database (not just read about it): one runs the
+example queries directly against the internal functions, one lets you ask your
+own question end-to-end through a real LLM, one runs every example question's
+natural-language text through a real LLM and checks the result, and one spawns
+`src/mcp-server.js` itself as a real child process and drives it through the
+actual MCP stdio protocol — the same way Claude Code or Claude Desktop would —
+rather than calling internal functions directly. None of this ships with
+`npm install` — clone
+the repo if you want it. See that folder's own README for details.
+
+---
+
+## How releases are tested
+
+`npm test` (123 unit tests) runs against a mocked database — fast, but it can't
+catch backend-specific behavior (a real HANA deployment has rejected things the
+mocks happily accepted, more than once). Before tagging a release, `npm run
+test:deployment` is run against a real CAP project connected to live HANA
+Cloud — it requires real credentials and a deployed `examples/capability-demo/`
+schema, so it isn't part of `npm test` or CI, but it is a required manual step,
+not an optional one. `examples/capability-demo/smoke-test-server.js` is also
+run — it spawns `src/mcp-server.js` itself and drives it over the real MCP
+stdio protocol with a real LLM call, not just the internal functions directly.
+
+[RELEASE_VERIFICATION.md](./RELEASE_VERIFICATION.md) is the actual, append-only
+record of this — real output from a real run against live BTP HANA, captured
+and committed before each release, not just claimed.
 
 ---
 

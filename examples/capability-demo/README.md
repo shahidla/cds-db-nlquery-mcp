@@ -52,33 +52,71 @@ database (via `@cap-js/sqlite`), not hand-written or recalled from memory. Re-ru
 
 ## How to use this to validate a deployed app
 
+This isn't just a description of a workflow — there are four ready-to-run scripts
+in this folder that actually implement it, the same ones used to find and verify
+every fix described in this README and in `BLOG.md`'s "Real bugs, found and fixed"
+section.
+
 1. Build a CAP project from `schema.cds` + `data/`, deploy it (HANA on BTP, or
-   SQLite for local testing).
-2. Wire up this repo's MCP server against that deployment (or call
-   `executeDescriptor()` directly) and run each query's `descriptor` from
-   `queries.js`.
-3. Compare:
-   - the SQL your deployment actually executes against `results.json`'s `sql`
-     field for that query's `id`,
-   - the rows you get back against `results.json`'s `rows`.
-4. Any mismatch is either a real bug, or an expected backend-specific SQL syntax
-   difference (this demo generates SQLite-flavored SQL; HANA's `cqn2sql` may emit
-   slightly different SQL text for the same CQN — the CQN itself, and the rows,
-   should match regardless of backend).
+   SQLite for local testing), and make sure your project's cds config
+   (`.cdsrc.json` / `.cdsrc-private.json` / bound service) points at it.
+2. **`validate-deployment.js`** — runs every hand-written descriptor in
+   `queries.js` directly (no LLM involved) against your deployment and compares
+   the rows to `results.json`. This tells you whether the *execution* layer
+   (CQN → SQL → rows) works correctly on your specific backend/adapter.
+   ```sh
+   node examples/capability-demo/validate-deployment.js
+   # on the legacy @sap/hana-client runtime, 4 entries are confirmed limitations:
+   LEGACY_HANA_CLIENT=true node examples/capability-demo/validate-deployment.js
+   ```
+3. **`ask.js`** — ask your own natural-language question against your deployment,
+   end-to-end through a real LLM. Useful for trying things `queries.js` doesn't
+   cover.
+   ```sh
+   node examples/capability-demo/ask.js "Which loans have a DTI above 50?"
+   node examples/capability-demo/ask.js --provider=anthropic "..."
+   ```
+4. **`ask-batch.js`** — runs every `queries.js` question's *natural-language* text
+   (not the hand-written descriptor) through a real LLM and compares the result.
+   This is what actually distinguishes an LLM mistake from a package bug — see
+   `BLOG.md` for what this surfaced in practice.
+   ```sh
+   node examples/capability-demo/ask-batch.js                    # DeepSeek/OpenAI-compatible
+   node examples/capability-demo/ask-batch.js --provider=anthropic
+   ```
+   Both need the relevant API key as an env var (`OPENAI_API_KEY` +
+   `OPENAI_BASE_URL` for DeepSeek/Groq/etc., or `ANTHROPIC_API_KEY` for Claude).
+5. **`smoke-test-server.js`** — unlike the three scripts above, which all call
+   `src/schema-reader.js`/`src/query-executor.js`/`src/llm-planner.js` directly
+   via `require()`, this one spawns `src/mcp-server.js` itself as a real child
+   process and drives it through the actual MCP stdio/JSON-RPC protocol via
+   `@modelcontextprotocol/sdk`'s `Client` — the same way Claude Code, Claude
+   Desktop, or `npx -y @shahid.la/cds-db-nlquery-mcp` actually invoke it. The other
+   scripts confirm the library code is correct; this one confirms the *published
+   artifact*, talked to the way a real consumer talks to it, is correct too.
+   ```sh
+   node examples/capability-demo/smoke-test-server.js
+   ```
+6. Any mismatch from `validate-deployment.js` is either a real bug, or an expected
+   backend-specific SQL syntax difference (this demo's `results.json` was
+   generated against SQLite; HANA's `cqn2sql` may emit slightly different SQL
+   text for the same CQN — the CQN itself, and the rows, should match regardless
+   of backend).
 
    **Tested against real BTP HANA Cloud with both HANA adapters CDS supports** —
    the legacy `@sap/hana-client`-based runtime (still the default for most existing
    CAP+HANA projects), and the modern `@cap-js/db-service`-based `@cap-js/hana`.
-   Findings:
+   As of this writing, `queries.js` has 35 entries (3 deliberately test rejection
+   behavior, 32 expect real rows). Findings:
 
-   - **With `@cap-js/hana` installed: all 30 queries pass, exactly matching
-     `results.json`'s SQLite-generated rows.** This includes `viaFiltered` inside
-     `aggregate`/`having` and every window function (rank, top-N-per-group,
-     running total) — confirmed with real, hand-verified numbers (e.g. filtered
-     per-customer sums and per-partition rankings checked by hand against the seed
-     data), not just "didn't throw."
-   - **With the legacy `@sap/hana-client` runtime: 2 things are genuinely broken**,
-     not just inferred — root-caused against a real deployment:
+   - **With `@cap-js/hana` installed: all 35 entries pass**, the 32 real-row ones
+     exactly matching `results.json`'s SQLite-generated rows. This includes
+     `viaFiltered` inside `aggregate`/`having` and every window function (rank,
+     top-N-per-group, running total) — confirmed with real, hand-verified numbers
+     (e.g. filtered per-customer sums and per-partition rankings checked by hand
+     against the seed data), not just "didn't throw."
+   - **With the legacy `@sap/hana-client` runtime: 2 things are genuinely
+     adapter-specific**, root-caused against a real deployment, not just inferred:
      - `viaFiltered` inside `aggregate`/`having` crashes inside CDS's own internal
        alias-generation utility (`generateAliases.js`, `"table.startsWith is not a
        function"`) — it assumes a plain string table alias, but `viaFiltered`
@@ -94,13 +132,32 @@ database (via `@cap-js/sqlite`), not hand-written or recalled from memory. Re-ru
      `@cap-js/hana` matches `@cap-js/sqlite`'s conventions (JS numbers, and
      `sector_DESCRIPTION`-style auto-aliasing) exactly. They only matter if you're
      still on the legacy runtime.
+   - **Several other real bugs found via this same live-HANA testing were NOT
+     adapter-specific** — they affected both adapters equally and are fixed at
+     the package level, not adapter-detected around: `expand`'s `orderBy`/`limit`
+     truncation was unimplemented at first; three post-fetch steps (enum-to-text
+     translation, the row cap, blocked-column stripping) all silently skipped a
+     `to-one` nested branch; an unrecognized top-level descriptor field was
+     silently ignored instead of rejected; colliding output-column aliases across
+     `select`/`aggregate`/`window`/`caseWhen` reached HANA as a raw SQL crash; the
+     standard SQL "every non-aggregated select column needs groupBy" rule wasn't
+     enforced. See git history / `BLOG.md` for the full account of each.
+   - One more, found only reachable on the **modern** adapter specifically (window
+     functions are rejected outright on the legacy one, so this code path is
+     never reached there): a top-level `orderBy` using an association path,
+     combined with `windowFilter`, crashes inside `@cap-js/db-service`'s own query
+     inference (`"X not found in the elements of undefined"`) because the
+     `windowFilter` wrapper has no association metadata left to resolve a path
+     against. Rejected explicitly with a workaround instead of letting that
+     surface.
 
    **Bottom line**: this package's CQN construction is correct for every
-   capability it claims to support — every gap found was in the legacy
-   `@sap/hana-client` runtime itself, not in this package's own code. If you're
-   hitting any of the legacy-runtime errors above, switching to `@cap-js/hana` is
-   confirmed (not just theorized) to resolve them — though that's your project's
-   own dependency decision, not something this package does for you.
+   capability it claims to support, on a modern adapter. The legacy
+   `@sap/hana-client` runtime has 2 confirmed limitations this package can detect
+   and reject but not fix (switching to `@cap-js/hana` is confirmed, not just
+   theorized, to resolve them — your project's own dependency decision). Every
+   other bug found this way was a real defect in this package's own code, now
+   fixed and covered by a regression test.
 
 ## Regenerating
 

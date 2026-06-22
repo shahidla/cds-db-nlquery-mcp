@@ -1,6 +1,13 @@
 #!/usr/bin/env node
 'use strict';
 
+const { version } = require('../package.json');
+
+if (process.argv.includes('--version') || process.argv.includes('-v')) {
+  console.log(version);
+  process.exit(0);
+}
+
 const { Server }               = require('@modelcontextprotocol/sdk/server/index.js');
 const { StdioServerTransport } = require('@modelcontextprotocol/sdk/server/stdio.js');
 const {
@@ -111,7 +118,7 @@ async function bootstrap() {
 // ── MCP server ───────────────────────────────────────────────────────────────
 
 const server = new Server(
-  { name: 'cds-db-nlquery-mcp', version: '0.6.0' },
+  { name: 'cds-db-nlquery-mcp', version },
   { capabilities: { tools: {} } }
 );
 
@@ -237,6 +244,23 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
     (descriptor.where || []).forEach(w =>
       process.stderr.write(`  where  : ${w.col} ${w.op} ${w.valCol ? `[col]${w.valCol}` : JSON.stringify(w.val)}\n`)
     );
+    // Found while investigating an apparent (but ultimately false-alarm) hierarchy
+    // bug: this logging only ever covered entity/select/where/orderBy/limit/offset,
+    // silently omitting every other descriptor field — hierarchy, aggregate,
+    // groupBy, having, expand, window, windowFilter, caseWhen, asOf. The query was
+    // executing correctly the whole time; the log just made it look like the field
+    // had been dropped, which is exactly the kind of thing that wastes someone's
+    // debugging time for nothing. Log all of them now.
+    if (descriptor.aggregate?.length) process.stderr.write(`  aggregate : ${JSON.stringify(descriptor.aggregate)}\n`);
+    if (descriptor.groupBy?.length) process.stderr.write(`  groupBy : ${descriptor.groupBy.join(', ')}\n`);
+    if (descriptor.having?.length) process.stderr.write(`  having : ${JSON.stringify(descriptor.having)}\n`);
+    if (descriptor.search) process.stderr.write(`  search : ${descriptor.search}\n`);
+    if (descriptor.expand?.length) process.stderr.write(`  expand : ${JSON.stringify(descriptor.expand)}\n`);
+    if (descriptor.hierarchy) process.stderr.write(`  hierarchy : ${JSON.stringify(descriptor.hierarchy)}\n`);
+    if (descriptor.window?.length) process.stderr.write(`  window : ${JSON.stringify(descriptor.window)}\n`);
+    if (descriptor.windowFilter?.length) process.stderr.write(`  windowFilter : ${JSON.stringify(descriptor.windowFilter)}\n`);
+    if (descriptor.caseWhen?.length) process.stderr.write(`  caseWhen : ${JSON.stringify(descriptor.caseWhen)}\n`);
+    if (descriptor.asOf) process.stderr.write(`  asOf : ${descriptor.asOf}\n`);
     if (descriptor.orderBy) process.stderr.write(`  order  : ${descriptor.orderBy} ${descriptor.orderDir || 'ASC'}\n`);
     process.stderr.write(`  limit  : ${descriptor.limit || 50}\n`);
     if (descriptor.offset) process.stderr.write(`  offset : ${descriptor.offset}\n`);
