@@ -170,10 +170,14 @@ function buildSchema(cdsModel) {
         const pairCol = col['@Semantics.amount.currencyCode'] || col['@Semantics.quantity.unitOfMeasure'];
         if (pairCol) meta.pairedWith = pairCol;
 
-        // Calculated-on-read elements (colName = (expression)) are computed by the DB
-        // on every query — safe to SELECT like any stored column, but tagged so the LLM
-        // understands it's a derived value (e.g. some DBs can't index a computed expression).
-        if (col.value) meta.calculated = true;
+        // Calculated-on-read elements (colName = (expression)) are NOT guaranteed to be a
+        // real physical/generated column at the DB layer — confirmed against a real HANA
+        // deployment (`cds deploy --to hana`): the table has no FULL column at all, so
+        // `SELECT FULL FROM ...` fails with "invalid column name". SQLite's adapter seems
+        // to tolerate this differently, but we can't rely on backend-specific behavior.
+        // Store the original CQN expression so the executor can substitute it directly
+        // (`{ xpr: [...], as: colName }`) instead of emitting a plain column ref.
+        if (col.value) { meta.calculated = true; meta.calcExpr = col.value; }
 
         // Native CDS enum (e.g. `STATUS : String(1) enum { active = 'A'; closed = 'C'; }`)
         // — the same SAP-standard mechanism Fiori uses for value help / coded dropdowns.

@@ -75,19 +75,25 @@ RANGE HINTS:
     scale than that the data is wrong — double check the column choice and value before
     emitting the filter (e.g. a percentage 0-1 vs 0-100 mismatch).
 
-FILTERED JOINS (only matters together with aggregation):
-  - "Total of OPEN payments per loan" needs the OPEN filter applied INSIDE the join to
-    payments, not as a top-level WHERE on the outer query — a top-level WHERE on an
-    aggregated query would incorrectly exclude loans whose ONLY payments are non-OPEN,
-    rather than just excluding non-OPEN payments from the sum. Replace the plain column
-    path with this structured form wherever a "col"/"valCol" is used (select, where,
-    aggregate.col, having.col — NOT groupBy/orderBy):
+FILTERED JOINS (select/where only — NOT aggregate):
+  - "Show each loan's OPEN payments" (no aggregation) needs the OPEN filter applied
+    INSIDE the join to payments, not as a top-level WHERE on the outer query — a
+    top-level WHERE would incorrectly drop the whole loan row if it has any non-OPEN
+    payment, rather than just scoping which payments are shown. Use this structured
+    form wherever a "col"/"valCol" is used in "select" or "where" (NOT in "aggregate",
+    "groupBy", "having", or "orderBy" — see below):
     {"col": "AMOUNT", "viaFiltered": {"assoc": "payments", "where": [{"col":"STATUS","op":"=","val":"OPEN"}]}}
-    Used in an aggregate, e.g.: {"fn":"sum","col":{"col":"AMOUNT","viaFiltered":{"assoc":"payments","where":[{"col":"STATUS","op":"=","val":"OPEN"}]}},"as":"open_total"}
   - viaFiltered.where conditions must be plain columns of the filtered association's
     OWN target entity — never a further "assoc.COL" path off of it.
   - Use a normal top-level "where" condition instead when there's no aggregation, or
-    when the filter is meant to exclude whole parent rows (not just scope a sum/count).
+    when the filter is meant to exclude whole parent rows (not just scope a value).
+  - viaFiltered is REJECTED inside "aggregate" on this backend (confirmed against real
+    HANA — CDS's own query builder cannot resolve a filtered-association argument
+    inside an aggregate function and throws an internal error). For "total of OPEN
+    payments per loan" style questions, do NOT start from "Loans" with a viaFiltered
+    aggregate. Instead start from the many-side entity directly and group by the
+    foreign key — this expresses the exact same thing and is fully supported:
+    {"entity": "Payments", "select": ["LOAN_ID"], "where": [{"col":"STATUS","op":"=","val":"OPEN"}], "aggregate": [{"fn":"sum","col":"AMOUNT","as":"open_total"}], "groupBy": ["LOAN_ID"]}
 
 AGGREGATION:
   - Use "aggregate": [{ "fn": "count"|"sum"|"avg"|"min"|"max", "col": "COLUMN or assocAlias.COLUMN or *", "as": "alias" }]

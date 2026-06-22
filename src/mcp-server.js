@@ -111,7 +111,7 @@ async function bootstrap() {
 // ── MCP server ───────────────────────────────────────────────────────────────
 
 const server = new Server(
-  { name: 'cds-db-nlquery-mcp', version: '0.5.3' },
+  { name: 'cds-db-nlquery-mcp', version: '0.6.0' },
   { capabilities: { tools: {} } }
 );
 

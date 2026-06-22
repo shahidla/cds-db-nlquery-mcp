@@ -427,10 +427,33 @@ function buildExpandCols(expandList, parentEntityDef, schema, allBlocked, maxExp
     const whereExpr = buildWhereExpr(node.where, targetDef, schema);
     if (whereExpr) expandCol.where = whereExpr;
 
-    expandCol.limit = { rows: { val: Math.min(node.limit || maxExpandRows, maxExpandRows) } };
+    // NOT setting expandCol.limit here — confirmed against real HANA: CDS's
+    // join-based expand rewriter (expandCQNToJoin.js) throws "Pagination is not
+    // supported in expand" the moment a nested expand column carries a limit at
+    // all. SQLite's expand implementation tolerates it, but we can't rely on
+    // backend-specific behavior. The same maxExpandRows cap is enforced instead
+    // by truncating each row's nested array post-fetch (see truncateExpandRows).
 
     return expandCol;
   });
+}
+
+// Enforces the same per-branch row cap that buildExpandCols used to push into the
+// query itself (see comment above) — now applied client-side after cds.run(),
+// since HANA's join-based expand engine rejects a limit on the nested column.
+function truncateExpandRows(rows, expandList, maxExpandRows) {
+  if (!expandList?.length) return rows;
+  for (const row of rows) {
+    for (const node of expandList) {
+      const cap = Math.min(node.limit || maxExpandRows, maxExpandRows);
+      const nested = row[node.assoc];
+      if (Array.isArray(nested)) {
+        if (nested.length > cap) nested.length = cap;
+        if (node.expand?.length) truncateExpandRows(nested, node.expand, maxExpandRows);
+      }
+    }
+  }
+  return rows;
 }
 
 // Executes a "hierarchy" descriptor — unbounded traversal of a self-referencing
@@ -665,13 +688,54 @@ async function executeDescriptor(descriptor, schema, callConfig = {}) {
   // being selected/aggregated/compared, not as a grouping/sort key) is rejected here
   // with a clear error instead of producing a broken query.
   if ((groupBy || []).some(isFilteredSpec) || isFilteredSpec(orderBy)) {
-    throw new Error('viaFiltered is not supported in "groupBy" or "orderBy" — only in "select", "where", "aggregate", and "having".');
+    throw new Error('viaFiltered is not supported in "groupBy" or "orderBy" — only in "select" and "where".');
+  }
+
+  // Confirmed against real HANA (not caught by the SQLite-based test suite): when a
+  // viaFiltered ref is used as an aggregate function's argument, CDS's own internal
+  // generateAliases utility crashes with "table.startsWith is not a function" — it
+  // assumes ref[0] is always a plain string table alias, but viaFiltered produces a
+  // structured { id, where } hop there. This reproduces with or without "groupBy"
+  // present, so it's a fundamental incompatibility, not something this package's own
+  // CQN construction can work around — reject it with a clear message instead of
+  // letting the cryptic internal crash surface.
+  // "having" hits the identical crash via the same buildAggregateCol() path
+  // buildHavingExpr() calls into — confirmed hands-on (re-tested with a correctly-
+  // formed { fn, col, op, val } having entry, not just inferred from the aggregate
+  // case): "table.startsWith is not a function", same root cause, same fix.
+  if ((aggregate || []).some(a => isFilteredSpec(a.col)) || (having || []).some(h => isFilteredSpec(h.col))) {
+    throw new Error('viaFiltered is not supported as an "aggregate" or "having" column on this backend (HANA) — CDS\'s own query builder cannot resolve a filtered-association argument inside an aggregate function. Use "select"/"where" instead.');
   }
 
   // "window" keeps every row and attaches a per-row computed value — a different query
   // shape than "aggregate"+"groupBy" (which collapses rows), so the two can't be mixed.
   if (windowList?.length && (aggregate?.length || groupBy?.length || having?.length || expand?.length)) {
     throw new Error('"window" cannot be combined with aggregate, groupBy, having, or expand.');
+  }
+
+  // Confirmed against real HANA (not caught by the SQLite-based test suite, which
+  // uses @cap-js/sqlite — a modern @cap-js/db-service-based adapter): the CQN shape
+  // this package builds for window functions ({func, args, xpr: ['over', ...]}) is
+  // correct per CAP's current standard — @cap-js/db-service's shared func() renderer
+  // explicitly handles the xpr sibling. But @sap/cds's legacy, @sap/hana-client-based
+  // HANA runtime (still the default/peer-dep target for this package, and what most
+  // existing CAP+HANA projects use today) silently drops that xpr sibling, producing
+  // a function call with no OVER clause at all and a downstream HANA syntax error.
+  // A modern adapter (@cap-js/hana, built on the same @cap-js/db-service base as
+  // @cap-js/sqlite) would very likely render this correctly, but switching HANA
+  // drivers is the consuming project's decision, not something this package can do
+  // for them. Detect which kind of adapter is actually connected — modern
+  // @cap-js/db-service-based services expose db.cqn2sql directly, the legacy one
+  // does not — and reject with an actionable message rather than the SQL gets a step
+  // further only to come back as a cryptic "incorrect syntax near AS" from HANA.
+  if (windowList?.length && typeof cds.db?.cqn2sql !== 'function') {
+    throw new Error(
+      '"window" functions are not supported against this database connection. ' +
+      'The legacy @sap/hana-client-based HANA runtime does not render the OVER clause ' +
+      '— this requires a modern @cap-js/db-service-based adapter (e.g. @cap-js/hana for ' +
+      'HANA, already the case for @cap-js/sqlite if that\'s what\'s connected). ' +
+      'Use "aggregate"+"groupBy" instead if a per-group total/count is enough.'
+    );
   }
   if (windowFilter?.length && !windowList?.length) {
     throw new Error('"windowFilter" requires "window" to be present.');
@@ -755,6 +819,13 @@ async function executeDescriptor(descriptor, schema, callConfig = {}) {
     // "Duplicate column names". Rather than depend on prompt compliance, alias any
     // joined-path column (length > 1) whose leaf name collides with another
     // selected column, so the query is always valid regardless of what the LLM did.
+    //
+    // Note for callers: an UNALIASED joined column with no collision (e.g.
+    // "sector.DESCRIPTION" selected alone) keeps its bare leaf name on this
+    // backend's legacy HANA runtime ("DESCRIPTION"), but a modern @cap-js/db-
+    // service-based adapter names it "sector_DESCRIPTION" by default — confirmed
+    // against a real deployment, see examples/capability-demo/README.md. Pass an
+    // explicit "as" whenever the result key needs to be stable across backends.
     const leafCounts = {};
     for (const c of filteredSelect) {
       const leaf = specPath(c).split('.').pop();
@@ -762,10 +833,22 @@ async function executeDescriptor(descriptor, schema, callConfig = {}) {
     }
     const selectCols = filteredSelect.map(c => {
       const explicitAlias = specAlias(c);
-      if (explicitAlias) return { ...resolveColSpec(c), as: explicitAlias };
-
       const parts = specPath(c).split('.');
       const leaf = parts[parts.length - 1];
+
+      // A calculated-on-read column (e.g. FULL = FIRST || ' ' || LAST) is not
+      // guaranteed to be a real physical column on every backend — confirmed
+      // against a real HANA deployment, which never materialized one. Substitute
+      // the original expression directly instead of a column ref that may not
+      // resolve. Only applies to plain top-level columns (parts.length === 1);
+      // a calculated column reached via a join path isn't supported here.
+      if (parts.length === 1 && !isFilteredSpec(c)) {
+        const calcExpr = entityDef.columns[leaf]?.calcExpr;
+        if (calcExpr) return { ...calcExpr, as: explicitAlias || leaf };
+      }
+
+      if (explicitAlias) return { ...resolveColSpec(c), as: explicitAlias };
+
       if (leafCounts[leaf] > 1 && parts.length > 1 && !isFilteredSpec(c)) {
         return { ref: parts, as: parts.join('_') };
       }
@@ -839,6 +922,7 @@ async function executeDescriptor(descriptor, schema, callConfig = {}) {
   finalQ.limit(effectiveLimit, effectiveOffset);   // single SQL LIMIT/OFFSET — HANA enforces it, not Node.js
 
   let rows = await cds.run(finalQ);
+  if (expand?.length) rows = truncateExpandRows(rows, expand, serverCfg.maxExpandRows);
 
   // Translate enum raw values back to business terms (same mechanism Fiori uses for
   // coded value display) — e.g. STATUS: "C" also gets STATUS_text: "closed" alongside it.

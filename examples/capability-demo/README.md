@@ -66,6 +66,34 @@ database (via `@cap-js/sqlite`), not hand-written or recalled from memory. Re-ru
    slightly different SQL text for the same CQN — the CQN itself, and the rows,
    should match regardless of backend).
 
+   **Two confirmed, non-bug differences found by actually running this demo's
+   schema against a real BTP HANA Cloud deployment** (not just SQLite):
+   - **Decimal columns come back as strings on HANA** (`"1500.00"`), as JS numbers
+     on SQLite (`1500`) — same value, different driver representation. Compare
+     numerically, not via strict string/JSON equality.
+   - **An unaliased joined column's default name differs by backend** when there's
+     no leaf-name collision to force an explicit alias — e.g. `sector.DESCRIPTION`
+     with no `as` comes back named `DESCRIPTION` on HANA's legacy runtime, but
+     `sector_DESCRIPTION` on `@cap-js/sqlite`. Give an explicit `{ "col": "...",
+     "as": "..." }` alias whenever consistent column naming across backends
+     matters — don't rely on the implicit default.
+
+   **One confirmed real limitation of this package's current implementation when
+   connected through the legacy `@sap/hana-client`-based HANA runtime** (still the
+   peer-dep target most existing CAP+HANA projects use today, as opposed to the
+   newer `@cap-js/db-service`-based `@cap-js/hana`):
+   - `viaFiltered` inside `aggregate` or `having` — and **all window functions** —
+     are rejected with a clear error instead of silently producing wrong/broken
+     SQL. Root cause confirmed against a real deployment in both cases (not
+     inferred): CDS's own internal alias-generation utility crashes on a
+     `viaFiltered` ref inside an aggregate argument; window functions' `OVER`
+     clause is silently dropped by the legacy runtime's function renderer. A
+     modern `@cap-js/db-service`-based HANA adapter would very likely render both
+     correctly (confirmed: the shared `func()` renderer in `@cap-js/db-service`,
+     which both `@cap-js/sqlite` and `@cap-js/hana` build on, explicitly handles
+     the CQN shape this package generates) — but switching HANA drivers is the
+     consuming project's decision, not something this package does for them.
+
 ## Regenerating
 
 ```sh

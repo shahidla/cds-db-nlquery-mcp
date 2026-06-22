@@ -4,6 +4,13 @@ const assert = require('node:assert/strict');
 const cds = require('@sap/cds');
 const { executeDescriptor } = require('../src/query-executor');
 
+// Window functions require a modern @cap-js/db-service-based adapter (confirmed
+// against real HANA: the legacy @sap/hana-client runtime silently drops the OVER
+// clause). The executor detects this via db.cqn2sql — present on modern adapters,
+// absent on the legacy one. Every test in this file assumes a modern adapter is
+// connected unless it explicitly says otherwise (see the dedicated rejection test).
+cds.db = { cqn2sql: () => {} };
+
 // Minimal synthetic schema matching what schema-reader.js would produce.
 const schema = {
   Orders: {
@@ -395,7 +402,11 @@ test('expand produces a nested { ref, expand } CQN column', async () => {
     const expandCol = cols.find(c => c.ref?.[0] === 'items');
     assert.ok(expandCol, 'expand column must be present');
     assert.deepEqual(expandCol.expand.map(c => c.ref[0]), ['PRODUCT', 'QTY']);
-    assert.ok(expandCol.limit.rows.val > 0, 'expand level must have a default row cap');
+    // Confirmed against real HANA: a "limit" on a nested expand column makes CDS's
+    // own join-based expand rewriter throw "Pagination is not supported in expand".
+    // The row cap is enforced post-fetch instead (see the row-cap test below) — the
+    // CQN itself must never carry a limit on an expand column.
+    assert.equal(expandCol.limit, undefined, 'expand column must NOT carry a limit in the CQN');
   } finally {
     capture.restore();
   }
@@ -427,21 +438,24 @@ test('expand strips blocked columns from the nested select', async () => {
   }
 });
 
-test('expand row cap is bounded by server maxExpandRows', async () => {
-  const capture = captureQuery();
+test('expand row cap is bounded by server maxExpandRows (enforced post-fetch)', async () => {
+  // The cap can no longer be pushed into the query itself (see the test above) —
+  // it's enforced by truncating each row's nested array after cds.run() returns.
+  const mock = mockRunSequence([[
+    { ID: 'O1', items: [{ PRODUCT: 'P1' }, { PRODUCT: 'P2' }, { PRODUCT: 'P3' }, { PRODUCT: 'P4' }, { PRODUCT: 'P5' }] },
+  ]]);
   const config = require('../src/config');
   const original = config.maxExpandRows;
   config.maxExpandRows = 3;
   try {
-    await executeDescriptor(
+    const rows = await executeDescriptor(
       { entity: 'Orders', select: ['ID'], expand: [{ assoc: 'items', select: ['PRODUCT'], limit: 999 }] },
       schema, {}
     );
-    const expandCol = capture.get().SELECT.columns.find(c => c.ref?.[0] === 'items');
-    assert.equal(expandCol.limit.rows.val, 3);
+    assert.equal(rows[0].items.length, 3, 'nested array must be truncated to maxExpandRows regardless of the requested limit');
   } finally {
     config.maxExpandRows = original;
-    capture.restore();
+    mock.restore();
   }
 });
 
@@ -497,10 +511,14 @@ test('expand on an unknown association throws a clear error', async () => {
   );
 });
 
-test('viaFiltered in aggregate.col attaches the filter to the join hop, not a top-level WHERE', async () => {
-  const capture = captureQuery();
-  try {
-    await executeDescriptor(
+test('viaFiltered in aggregate.col is rejected (confirmed broken against real HANA)', async () => {
+  // Was previously expected to succeed — the CQN shape itself is valid, but real
+  // HANA testing found CDS's own generateAliases utility crashes ("table.startsWith
+  // is not a function") the moment a viaFiltered ref appears as an aggregate
+  // argument, with or without groupBy. Rejecting explicitly now instead of letting
+  // that cryptic internal error surface.
+  await assert.rejects(
+    () => executeDescriptor(
       {
         entity: 'Orders', select: ['ID'],
         aggregate: [{
@@ -511,16 +529,30 @@ test('viaFiltered in aggregate.col attaches the filter to the join hop, not a to
         groupBy: ['ID'],
       },
       schema, {}
-    );
-    const sumCol = capture.get().SELECT.columns.find(c => c.func === 'sum');
-    const hop = sumCol.args[0].ref[0];
-    assert.equal(hop.id, 'items');
-    assert.deepEqual(hop.where, [{ ref: ['PRODUCT'] }, '=', { val: 'X' }]);
-    assert.equal(sumCol.args[0].ref[1], 'QTY');
-    assert.ok(!capture.get().SELECT.where, 'the filter must not appear as a top-level WHERE');
-  } finally {
-    capture.restore();
-  }
+    ),
+    /viaFiltered is not supported as an "aggregate" or "having" column/
+  );
+});
+
+test('viaFiltered in having.col is rejected (same root cause as aggregate.col)', async () => {
+  // buildHavingExpr() calls into the same buildAggregateCol()/resolveColSpec() path
+  // as a plain aggregate — confirmed hands-on with a correctly-formed { fn, col, op,
+  // val } having entry (an earlier ad-hoc test without "fn" hit a different,
+  // self-inflicted error from a malformed descriptor, not this real one).
+  await assert.rejects(
+    () => executeDescriptor(
+      {
+        entity: 'Orders', select: ['ID'], groupBy: ['ID'],
+        having: [{
+          fn: 'sum',
+          col: { col: 'QTY', viaFiltered: { assoc: 'items', where: [{ col: 'PRODUCT', op: '=', val: 'X' }] } },
+          op: '>', val: 10,
+        }],
+      },
+      schema, {}
+    ),
+    /viaFiltered is not supported as an "aggregate" or "having" column/
+  );
 });
 
 test('viaFiltered in select attaches the filter to the join hop', async () => {
@@ -543,14 +575,14 @@ test('viaFiltered in select attaches the filter to the join hop', async () => {
 });
 
 test('viaFiltered rejects a path-valued column inside its own filter', async () => {
+  // Moved off "aggregate" (now unconditionally rejected for viaFiltered, see above) —
+  // this nested-path restriction is a general viaFiltered behavior, still real and
+  // still worth covering via "select".
   await assert.rejects(
     () => executeDescriptor(
       {
-        entity: 'Orders', select: ['ID'],
-        aggregate: [{
-          fn: 'sum',
-          col: { col: 'QTY', viaFiltered: { assoc: 'items', where: [{ col: 'productRef.NAME', op: '=', val: 'X' }] } },
-        }],
+        entity: 'Orders',
+        select: [{ col: 'QTY', viaFiltered: { assoc: 'items', where: [{ col: 'productRef.NAME', op: '=', val: 'X' }] } }],
       },
       schema, {}
     ),
@@ -559,14 +591,13 @@ test('viaFiltered rejects a path-valued column inside its own filter', async () 
 });
 
 test('viaFiltered association target is enforced by the allowlist', async () => {
+  // Moved off "aggregate" for the same reason as above — allowlist enforcement on
+  // the viaFiltered target is a general behavior, still real and worth covering.
   await assert.rejects(
     () => executeDescriptor(
       {
-        entity: 'Orders', select: ['ID'],
-        aggregate: [{
-          fn: 'sum',
-          col: { col: 'QTY', viaFiltered: { assoc: 'items', where: [{ col: 'PRODUCT', op: '=', val: 'X' }] } },
-        }],
+        entity: 'Orders',
+        select: [{ col: 'QTY', viaFiltered: { assoc: 'items', where: [{ col: 'PRODUCT', op: '=', val: 'X' }] } }],
       },
       schema,
       { allowedEntities: ['Orders'] } // Items deliberately excluded
@@ -753,6 +784,29 @@ test('hierarchy: rejects being combined with where/aggregate/expand/etc', async 
     ),
     /cannot be combined with/
   );
+});
+
+test('window functions are rejected when the connected db lacks a modern cqn2sql adapter', async () => {
+  // Confirmed against a real HANA deployment: the legacy @sap/hana-client-based
+  // runtime silently drops the OVER clause (no error at the CQN level — the query
+  // just comes back wrong), producing a downstream "incorrect syntax near AS" from
+  // HANA itself. Detect the legacy adapter (no db.cqn2sql) and reject up front with
+  // an actionable message instead. Every other test in this file assumes a modern
+  // adapter via the module-level cds.db stub set above — this test is the one place
+  // that deliberately simulates the legacy case.
+  const original = cds.db;
+  cds.db = undefined;
+  try {
+    await assert.rejects(
+      () => executeDescriptor(
+        { entity: 'Orders', select: ['ID', 'AMOUNT'], window: [{ fn: 'rank', as: 'r', partitionBy: ['CUSTOMER_ID'] }] },
+        schema, {}
+      ),
+      /window.*functions are not supported against this database connection/
+    );
+  } finally {
+    cds.db = original;
+  }
 });
 
 test('window: rank() over (partition by ... order by ...) builds the expected CQN column', async () => {
