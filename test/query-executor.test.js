@@ -25,7 +25,9 @@ const schema = {
   Customers: {
     key: 'ID', fqn: 'app.Customers',
     columns: { ID: { type: 'String' }, NAME: { type: 'String' } },
-    joins: {},
+    joins: {
+      orders: { entity: 'Orders', from: 'ID', to: 'CUSTOMER', type: 'LEFT', toMany: true },
+    },
   },
   Items: {
     key: 'ID', fqn: 'app.Items',
@@ -204,6 +206,39 @@ test('any group referencing a blocked-via-allowlist joined entity is still caugh
       { allowedEntities: ['Orders'] } // Customers deliberately excluded
     ),
     /reached via association join/
+  );
+});
+
+test('an unrecognized top-level descriptor field is rejected, not silently dropped', async () => {
+  // Found via real NL testing: an LLM produced { ..., "notExists": "orders", "where": [] }
+  // — "notExists" outside "where" isn't a recognized field at all. Destructuring
+  // alone would silently drop it, so the query ran with no filter (returning every
+  // row) instead of failing loudly. Same root-cause class as the expand.orderBy bug
+  // earlier this session — a field silently ignored instead of applied or rejected
+  // — just found at the top level instead of inside a nested structure.
+  await assert.rejects(
+    () => executeDescriptor({ entity: 'Orders', notExists: 'items', where: [] }, schema, {}),
+    /Unrecognized descriptor field.*notExists/
+  );
+});
+
+test('aliases colliding across select/aggregate/window/caseWhen are rejected, not left to crash in SQL', async () => {
+  // Found via real NL testing: an LLM selected a plain column aliased STATUS_TEXT
+  // AND added a caseWhen entry also aliased STATUS_TEXT (redundant, but the LLM
+  // didn't realize STATUS already auto-translates) — reached HANA as two columns
+  // with the same name and crashed with "Duplicate definition of element". The
+  // existing duplicate-leaf-name handling only covered collisions WITHIN "select"
+  // itself, never across select/aggregate/window/caseWhen together.
+  await assert.rejects(
+    () => executeDescriptor(
+      {
+        entity: 'Orders',
+        select: [{ col: 'AMOUNT', as: 'TOTAL' }],
+        aggregate: [{ fn: 'sum', col: 'AMOUNT', as: 'TOTAL' }],
+      },
+      schema, {}
+    ),
+    /Duplicate output column name "TOTAL"/
   );
 });
 
@@ -593,6 +628,43 @@ test('2-level nested expand: blocked columns are stripped at BOTH levels', async
     );
     assert.ok(!('SECRET' in rows[0].items[0]), 'level-1 SECRET must be stripped');
     assert.ok(!('SECRET' in rows[0].items[0].productRef), 'level-2 SECRET must also be stripped');
+  } finally {
+    mock.restore();
+  }
+});
+
+test('expand orderBy + limit truncation works when the to-many level is reached THROUGH a to-one level', async () => {
+  // Closes the last open cell in the post-fetch-recursion matrix: every other
+  // orderBy/truncation test so far put the to-many level first (Orders -> items).
+  // This is the other structurally-valid shape — to-one THEN to-many (Orders ->
+  // customer (to-one) -> orders (to-many, the customer's other orders)) — and
+  // truncateExpandRows' to-one unwrap-and-recurse path had never actually been
+  // exercised together with a real sort+cap at the level it unwraps into.
+  const mock = mockRunSequence([[
+    {
+      ID: 'O1',
+      customer: {
+        ID: 'C1',
+        orders: [
+          { ID: 'O1', AMOUNT: 50 },
+          { ID: 'O2', AMOUNT: 500 },
+          { ID: 'O3', AMOUNT: 200 },
+        ],
+      },
+    },
+  ]]);
+  try {
+    const rows = await executeDescriptor(
+      {
+        entity: 'Orders', select: ['ID'],
+        expand: [{
+          assoc: 'customer', select: ['ID'],
+          expand: [{ assoc: 'orders', select: ['ID', 'AMOUNT'], orderBy: 'AMOUNT', orderDir: 'DESC', limit: 1 }],
+        }],
+      },
+      schema, {}
+    );
+    assert.deepEqual(rows[0].customer.orders, [{ ID: 'O2', AMOUNT: 500 }]);
   } finally {
     mock.restore();
   }

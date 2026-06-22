@@ -3305,7 +3305,7 @@
             },
             "<=",
             {
-              "val": "2026-06-22T02:39:08.276Z"
+              "val": "2026-06-22T03:00:01.950Z"
             },
             "and",
             {
@@ -3315,7 +3315,7 @@
             },
             ">",
             {
-              "val": "2026-06-22T02:39:08.276Z"
+              "val": "2026-06-22T03:00:01.950Z"
             }
           ],
           "limit": {
@@ -3333,7 +3333,7 @@
       "SELECT \"$W\".EMPLOYEE,\"$W\".ROLE FROM capdemo_WorkAssignments as \"$W\" WHERE \"$W\".EMPLOYEE = ? and \"$W\".validFrom <= ? and \"$W\".validTo > ? LIMIT ? OFFSET ?"
     ],
     "readableSql": [
-      "SELECT \"$W\".EMPLOYEE,\"$W\".ROLE \nFROM capdemo_WorkAssignments as \"$W\" \nWHERE \"$W\".EMPLOYEE = 'Alice'\n  AND \"$W\".validFrom <= '2026-06-22T02:39:08.276Z'\n  AND \"$W\".validTo > '2026-06-22T02:39:08.276Z' \nLIMIT 50 OFFSET 0"
+      "SELECT \"$W\".EMPLOYEE,\"$W\".ROLE \nFROM capdemo_WorkAssignments as \"$W\" \nWHERE \"$W\".EMPLOYEE = 'Alice'\n  AND \"$W\".validFrom <= '2026-06-22T03:00:01.950Z'\n  AND \"$W\".validTo > '2026-06-22T03:00:01.950Z' \nLIMIT 50 OFFSET 0"
     ],
     "rows": [
       {
@@ -4155,6 +4155,184 @@
         "NAME": "Sub Branch North-1",
         "STATUS": "A",
         "STATUS_text": "active"
+      }
+    ],
+    "error": null
+  },
+  {
+    "id": "new-20-expand-orderby-through-to-one-then-to-many",
+    "nl": "For each order, that customer's other single largest order",
+    "descriptor": {
+      "entity": "Orders",
+      "select": [
+        "ID"
+      ],
+      "expand": [
+        {
+          "assoc": "customer",
+          "select": [
+            "ID",
+            "NAME"
+          ],
+          "expand": [
+            {
+              "assoc": "orders",
+              "select": [
+                "ID",
+                "AMOUNT"
+              ],
+              "orderBy": "AMOUNT",
+              "orderDir": "DESC",
+              "limit": 1
+            }
+          ]
+        }
+      ]
+    },
+    "cqn": [
+      {
+        "SELECT": {
+          "from": {
+            "ref": [
+              "capdemo.Orders"
+            ]
+          },
+          "columns": [
+            {
+              "ref": [
+                "ID"
+              ]
+            },
+            {
+              "ref": [
+                "customer"
+              ],
+              "expand": [
+                {
+                  "ref": [
+                    "ID"
+                  ]
+                },
+                {
+                  "ref": [
+                    "NAME"
+                  ]
+                },
+                {
+                  "ref": [
+                    "orders"
+                  ],
+                  "expand": [
+                    {
+                      "ref": [
+                        "ID"
+                      ]
+                    },
+                    {
+                      "ref": [
+                        "AMOUNT"
+                      ]
+                    }
+                  ]
+                }
+              ]
+            }
+          ],
+          "limit": {
+            "rows": {
+              "val": 50
+            },
+            "offset": {
+              "val": 0
+            }
+          }
+        }
+      }
+    ],
+    "sql": [
+      "SELECT \"$O\".ID,(SELECT json_insert('{}','$.\"ID\"',ID,'$.\"NAME\"',NAME,'$.\"orders\"',orders->'$') as _json_ FROM (SELECT \"$c\".ID,\"$c\".NAME,(SELECT jsonb_group_array(jsonb_insert('{}','$.\"ID\"',ID,'$.\"AMOUNT\"',AMOUNT)) as _json_ FROM (SELECT \"$o2\".ID,\"$o2\".AMOUNT FROM capdemo_Orders as \"$o2\" WHERE \"$o2\".CUSTOMER_ID = \"$c\".ID)) as orders FROM capdemo_Customers as \"$c\" WHERE \"$c\".ID = \"$O\".CUSTOMER_ID LIMIT ?)) as customer FROM capdemo_Orders as \"$O\" LIMIT ? OFFSET ?"
+    ],
+    "readableSql": [
+      "SELECT \"$O\".ID,(SELECT json_insert('{}','$.\"ID\"',ID,'$.\"NAME\"',NAME,'$.\"orders\"',orders->'$') as _json_ \nFROM (SELECT \"$c\".ID,\"$c\".NAME,(SELECT jsonb_group_array(jsonb_insert('{}','$.\"ID\"',ID,'$.\"AMOUNT\"',AMOUNT)) as _json_ \nFROM (SELECT \"$o2\".ID,\"$o2\".AMOUNT \nFROM capdemo_Orders as \"$o2\" \nWHERE \"$o2\".CUSTOMER_ID = \"$c\".ID)) as orders \nFROM capdemo_Customers as \"$c\" \nWHERE \"$c\".ID = \"$O\".CUSTOMER_ID \nLIMIT 1)) as customer \nFROM capdemo_Orders as \"$O\" \nLIMIT 50 OFFSET 0"
+    ],
+    "rows": [
+      {
+        "ID": "O1",
+        "customer": {
+          "ID": "C1",
+          "NAME": "Acme Corp",
+          "orders": [
+            {
+              "ID": "O2",
+              "AMOUNT": 2300.5
+            }
+          ]
+        }
+      },
+      {
+        "ID": "O2",
+        "customer": {
+          "ID": "C1",
+          "NAME": "Acme Corp",
+          "orders": [
+            {
+              "ID": "O2",
+              "AMOUNT": 2300.5
+            }
+          ]
+        }
+      },
+      {
+        "ID": "O3",
+        "customer": {
+          "ID": "C2",
+          "NAME": "Globex Inc",
+          "orders": [
+            {
+              "ID": "O4",
+              "AMOUNT": 4200
+            }
+          ]
+        }
+      },
+      {
+        "ID": "O4",
+        "customer": {
+          "ID": "C2",
+          "NAME": "Globex Inc",
+          "orders": [
+            {
+              "ID": "O4",
+              "AMOUNT": 4200
+            }
+          ]
+        }
+      },
+      {
+        "ID": "O5",
+        "customer": {
+          "ID": "C3",
+          "NAME": "Initech",
+          "orders": [
+            {
+              "ID": "O5",
+              "AMOUNT": 150
+            }
+          ]
+        }
+      },
+      {
+        "ID": "O6",
+        "customer": {
+          "ID": "C1",
+          "NAME": "Acme Corp",
+          "orders": [
+            {
+              "ID": "O2",
+              "AMOUNT": 2300.5
+            }
+          ]
+        }
       }
     ],
     "error": null

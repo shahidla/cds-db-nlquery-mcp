@@ -733,6 +733,27 @@ async function executeDescriptor(descriptor, schema, callConfig = {}) {
     offset: rawOffset = 0,
   } = descriptor;
 
+  // Found via real NL testing: an LLM produced a descriptor with a bare top-level
+  // "notExists": "orders" field (the correct shape is a where-clause condition,
+  // {"where": [{"notExists": "orders"}]} — not a top-level sibling of "where").
+  // Destructuring above silently drops any field that isn't one of the recognized
+  // names, so this was never applied at all — the query ran as if the condition
+  // didn't exist, returning every row instead of throwing. Same root-cause class
+  // as the expand.orderBy bug earlier this session (a field silently ignored
+  // instead of either applied or rejected), just found at the top level instead
+  // of inside a nested structure. Reject unrecognized fields explicitly so a
+  // malformed descriptor fails loudly instead of silently answering a different
+  // question than the one it was given.
+  const recognizedKeys = new Set([
+    'entity', 'select', 'where', 'aggregate', 'groupBy', 'having', 'search', 'expand',
+    'hierarchy', 'window', 'windowFilter', 'caseWhen', 'asOf', 'orderBy', 'orderDir',
+    'limit', 'offset',
+  ]);
+  const unknownKeys = Object.keys(descriptor).filter(k => !recognizedKeys.has(k));
+  if (unknownKeys.length) {
+    throw new Error(`Unrecognized descriptor field(s): ${unknownKeys.join(', ')}. Known fields: ${[...recognizedKeys].join(', ')}.`);
+  }
+
   const serverCfg = require('./config');
 
   // ── Access control ──────────────────────────────────────────────────────────
@@ -953,6 +974,24 @@ async function executeDescriptor(descriptor, schema, callConfig = {}) {
     const windowCols = windowList?.length ? windowList.map(buildWindowCol) : [];
     const caseWhenCols = caseWhen?.length ? caseWhen.map(c => buildCaseWhenCol(c, entityDef, schema)) : [];
     cols = [...selectCols, ...aggregateCols, ...expandCols, ...windowCols, ...caseWhenCols];
+
+    // Found via real NL testing: an LLM selected a plain column aliased "STATUS_TEXT"
+    // AND added a "caseWhen" entry also aliased "STATUS_TEXT" (redundant — STATUS is
+    // already a native enum and gets auto-translated — but the LLM didn't realize
+    // that). The existing duplicate-leaf-name check above only auto-aliases WITHIN
+    // "select" itself; it never compared across select/aggregate/window/caseWhen, so
+    // this reached HANA as two columns with the same name and crashed with "Duplicate
+    // definition of element". Catch any collision across ALL output columns, not just
+    // within one category, and reject with a clear message instead.
+    const outputName = c => c.as || (c.ref && c.ref[c.ref.length - 1]);
+    const seenNames = new Set();
+    for (const col of cols) {
+      const name = outputName(col);
+      if (name && seenNames.has(name)) {
+        throw new Error(`Duplicate output column name "${name}" — two entries across select/aggregate/window/caseWhen produce a column with this same name. Give each a distinct "as".`);
+      }
+      if (name) seenNames.add(name);
+    }
   } else if (allBlocked.size > 0) {
     // No explicit select ("all columns") but some columns are blocked. Without this,
     // the query would fall through to SELECT * — fetching blocked columns (e.g.

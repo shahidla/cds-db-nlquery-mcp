@@ -357,4 +357,16 @@ module.exports = [
       hierarchy: { assoc: 'children', direction: 'descendants', startWhere: [{ col: 'ID', op: '=', val: 'A1' }] },
     },
   },
+  {
+    id: 'new-20-expand-orderby-through-to-one-then-to-many',
+    nl: "For each order, that customer's other single largest order",
+    descriptor: {
+      entity: 'Orders',
+      select: ['ID'],
+      expand: [{
+        assoc: 'customer', select: ['ID', 'NAME'],
+        expand: [{ assoc: 'orders', select: ['ID', 'AMOUNT'], orderBy: 'AMOUNT', orderDir: 'DESC', limit: 1 }],
+      }],
+    },
+  },
 ];
