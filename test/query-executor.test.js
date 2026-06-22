@@ -222,6 +222,37 @@ test('an unrecognized top-level descriptor field is rejected, not silently dropp
   );
 });
 
+test('aggregate/having with an ungrouped plain select column is rejected, not left to crash in SQL', async () => {
+  // Found via real NL testing: an LLM used "having" (and, separately, plain
+  // "aggregate") with non-aggregated select columns but no "groupBy" at all —
+  // reproduces with or without "expand" too. Every variant reached HANA and
+  // crashed with a cryptic "column is invalid... GROUP BY clause or an
+  // aggregation function does not contain it". This is the standard SQL rule
+  // already documented in the LLM prompt ("required whenever select or
+  // aggregate mixes...") but never actually enforced in code until now.
+  await assert.rejects(
+    () => executeDescriptor(
+      { entity: 'Customers', select: ['ID', 'NAME'], aggregate: [{ fn: 'count', col: 'orders.ID', as: 'n' }] },
+      schema, {}
+    ),
+    /select.*includes plain column.*not in "groupBy"/
+  );
+});
+
+test('"expand" combined with "aggregate"/"having" is rejected — contradictory row shapes', async () => {
+  await assert.rejects(
+    () => executeDescriptor(
+      {
+        entity: 'Customers', select: ['ID', 'NAME'],
+        having: [{ fn: 'count', col: 'orders.ID', op: '>', val: 1 }],
+        expand: [{ assoc: 'orders', select: ['ID'] }],
+      },
+      schema, {}
+    ),
+    /"expand" cannot be combined with "aggregate" or "having"/
+  );
+});
+
 test('aliases colliding across select/aggregate/window/caseWhen are rejected, not left to crash in SQL', async () => {
   // Found via real NL testing: an LLM selected a plain column aliased STATUS_TEXT
   // AND added a caseWhen entry also aliased STATUS_TEXT (redundant, but the LLM
@@ -233,8 +264,12 @@ test('aliases colliding across select/aggregate/window/caseWhen are rejected, no
     () => executeDescriptor(
       {
         entity: 'Orders',
-        select: [{ col: 'AMOUNT', as: 'TOTAL' }],
-        aggregate: [{ fn: 'sum', col: 'AMOUNT', as: 'TOTAL' }],
+        select: ['ID'],
+        groupBy: ['ID'],
+        aggregate: [
+          { fn: 'sum', col: 'AMOUNT', as: 'TOTAL' },
+          { fn: 'count', col: 'AMOUNT', as: 'TOTAL' },
+        ],
       },
       schema, {}
     ),

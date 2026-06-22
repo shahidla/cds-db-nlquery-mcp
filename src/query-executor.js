@@ -825,6 +825,31 @@ async function executeDescriptor(descriptor, schema, callConfig = {}) {
     throw new Error('"window" cannot be combined with aggregate, groupBy, having, or expand.');
   }
 
+  // Found via real NL testing: an LLM used "having" (and, separately, plain
+  // "aggregate") with non-aggregated "select" columns but no "groupBy" at all —
+  // confirmed this isn't specific to any one combination (reproduces with
+  // "aggregate" alone too, with or without "expand") — every variant reaches HANA
+  // and crashes with a cryptic "column is invalid... GROUP BY clause or an
+  // aggregation function does not contain it". Standard SQL rule: every
+  // non-aggregated select column must also appear in groupBy. Validate this
+  // directly instead of letting the confusing downstream SQL error surface —
+  // also catches "expand" combined with aggregate/having, which is the same
+  // underlying contradiction (expand keeps one row per parent; aggregate
+  // collapses rows into groups) as the window+aggregate case just above.
+  if ((aggregate?.length || having?.length) && expand?.length) {
+    throw new Error('"expand" cannot be combined with "aggregate" or "having" — expand keeps one row per parent, aggregation collapses rows into groups; these are contradictory.');
+  }
+  if ((aggregate?.length || having?.length) && select?.length) {
+    const groupByPaths = new Set((groupBy || []).map(specPath));
+    const ungroupedSelect = select.filter(c => !isFilteredSpec(c) && !groupByPaths.has(specPath(c)));
+    if (ungroupedSelect.length) {
+      throw new Error(
+        `"select" includes plain column(s) not in "groupBy": ${ungroupedSelect.map(specPath).join(', ')}. ` +
+        `When "aggregate" or "having" is used, every non-aggregated "select" column must also appear in "groupBy".`
+      );
+    }
+  }
+
   // Confirmed against real HANA (not caught by the SQLite-based test suite, which
   // uses @cap-js/sqlite — a modern @cap-js/db-service-based adapter): the CQN shape
   // this package builds for window functions ({func, args, xpr: ['over', ...]}) is

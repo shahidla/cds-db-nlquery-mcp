@@ -306,7 +306,7 @@ module.exports = [
 
   {
     id: 'new-16-expand-enum-two-levels',
-    nl: 'Order items with their product, including status text at both levels',
+    nl: 'Show me each order with its line items nested inside, and each line item with its product nested inside that — including the status text at both the item and product level',
     descriptor: {
       entity: 'Orders',
       select: ['ID'],
@@ -318,7 +318,7 @@ module.exports = [
   },
   {
     id: 'new-17-expand-blocked-columns-two-levels',
-    nl: 'Order items with their product, excluding the SECRET column at both levels',
+    nl: 'Show me each order with its line items nested inside, and each line item with its product nested inside that — excluding the SECRET column at both the item and product level',
     descriptor: {
       entity: 'Orders',
       select: ['ID'],
@@ -341,7 +341,7 @@ module.exports = [
   },
   {
     id: 'new-18-expand-orderby-limit-top-n-per-group',
-    nl: "Each order's single largest line item by quantity",
+    nl: "For each order, nest just its single largest line item by quantity inside it — one order row each, with only the top line item nested inside",
     descriptor: {
       entity: 'Orders',
       select: ['ID'],
@@ -359,7 +359,7 @@ module.exports = [
   },
   {
     id: 'new-20-expand-orderby-through-to-one-then-to-many',
-    nl: "For each order, that customer's other single largest order",
+    nl: "For each order, nest that order's customer inside it, and nest that customer's single largest order (by amount, among all of that customer's orders) inside the customer",
     descriptor: {
       entity: 'Orders',
       select: ['ID'],
