@@ -412,6 +412,17 @@ function validateExpandNesting(expandList, parentEntityDef, schema, ancestorToMa
 // confirmed against cds.ql's own builder output for o.items(i => { i.product; i.qty }).
 function buildExpandCols(expandList, parentEntityDef, schema, allBlocked, maxExpandRows) {
   return (expandList || []).map(node => {
+    // Found via real NL testing: an LLM (correctly anticipating "single largest
+    // order per customer" needs sorting) added "orderBy"/"orderDir" to an expand
+    // node — a field this format never read at all, silently dropped, producing a
+    // wrong (arbitrary-order, then truncated) result that looked plausible but
+    // wasn't. Only a plain column is supported (sorting is done in JS post-fetch,
+    // see truncateExpandRows) — reject a path explicitly rather than silently
+    // misbehave the same way again.
+    if (node.orderBy?.includes('.')) {
+      throw new Error(`"expand" entry orderBy "${node.orderBy}" must be a plain column of "${node.assoc}" — paths are not supported here.`);
+    }
+
     const join = parentEntityDef.joins[node.assoc];
     const targetDef = schema[join.entity];
 
@@ -438,9 +449,25 @@ function buildExpandCols(expandList, parentEntityDef, schema, allBlocked, maxExp
   });
 }
 
+// Generic comparator for the JS-side expand sort below: numeric comparison when
+// both sides parse cleanly as finite numbers (covers HANA's decimal-as-string
+// columns too), string comparison otherwise (works fine for dates — ISO strings
+// sort correctly lexically — and plain text).
+function compareForSort(a, b) {
+  const na = Number(a), nb = Number(b);
+  if (a != null && b != null && a !== '' && b !== '' && !Number.isNaN(na) && !Number.isNaN(nb)) {
+    return na - nb;
+  }
+  return String(a).localeCompare(String(b));
+}
+
 // Enforces the same per-branch row cap that buildExpandCols used to push into the
 // query itself (see comment above) — now applied client-side after cds.run(),
 // since HANA's join-based expand engine rejects a limit on the nested column.
+// Also applies "orderBy" (see buildExpandCols' validation comment for why this
+// has to happen here, in JS, rather than in the query) — sort BEFORE truncating,
+// so "single largest order per customer" (orderBy DESC + limit 1) actually keeps
+// the largest one instead of an arbitrary row that happened to come back first.
 function truncateExpandRows(rows, expandList, maxExpandRows) {
   if (!expandList?.length) return rows;
   for (const row of rows) {
@@ -448,6 +475,10 @@ function truncateExpandRows(rows, expandList, maxExpandRows) {
       const cap = Math.min(node.limit || maxExpandRows, maxExpandRows);
       const nested = row[node.assoc];
       if (Array.isArray(nested)) {
+        if (node.orderBy) {
+          const dir = (node.orderDir || 'ASC').toUpperCase() === 'DESC' ? -1 : 1;
+          nested.sort((a, b) => dir * compareForSort(a[node.orderBy], b[node.orderBy]));
+        }
         if (nested.length > cap) nested.length = cap;
         if (node.expand?.length) truncateExpandRows(nested, node.expand, maxExpandRows);
       }

@@ -20,7 +20,7 @@ DESCRIPTOR FORMAT:
   "groupBy":  ["COL or assocAlias.COL", ...] (optional),
   "having":   [{ "fn": "...", "col": "...", "op": "...", "val": ... }] (optional),
   "search":   "free text term" (optional),
-  "expand":   [{ "assoc": "...", "select": [...], "where": [...], "limit": N, "expand": [...] }] (optional),
+  "expand":   [{ "assoc": "...", "select": [...], "where": [...], "orderBy": "COL", "orderDir": "ASC"|"DESC", "limit": N, "expand": [...] }] (optional),
   "hierarchy": { "assoc": "...", "direction": "descendants"|"ancestors", "startWhere": [...], "maxDepth": N|null } (optional),
   "window":   [{ "fn": "...", "as": "alias", "col": "COL", "partitionBy": [...], "orderBy": [...] }] (optional),
   "windowFilter": [{ "col": "window alias", "op": "...", "val": ... }] (optional),
@@ -115,6 +115,10 @@ NESTED / DEEP READS (compositions, to-many):
   - Use a flat "assocAlias.COL" path instead when you only need ONE scalar value pulled
     from a to-one association (e.g. "loan's customer name") or when you genuinely want one
     flat row per child (e.g. "list every payment along with its loan amount").
+  - To control WHICH child rows survive "limit" (e.g. "each customer's single largest
+    order"), add "orderBy"/"orderDir" to the expand entry — sorted BEFORE the limit is
+    applied, not after: {"assoc":"orders","orderBy":"AMOUNT","orderDir":"DESC","limit":1}.
+    "orderBy" here must be a plain column of the expanded entity — no "assoc.COL" paths.
   - "expand" entries can themselves contain a nested "expand" for grandchildren — but ONLY
     when the nested association is to-one relative to the parent expand's entity (a join
     shown with ",toMany" in the schema's "joins:" list is to-many). Two to-many levels

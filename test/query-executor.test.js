@@ -459,6 +459,45 @@ test('expand row cap is bounded by server maxExpandRows (enforced post-fetch)', 
   }
 });
 
+test('expand orderBy sorts before limit is applied — keeps the actual largest, not an arbitrary row', async () => {
+  // Found via real NL testing: an LLM asked for "each customer's single largest
+  // order" and produced an expand entry with orderBy/orderDir + limit:1 — a field
+  // this code never read at all before this fix, silently dropping it and
+  // truncating to whatever row happened to come back first (a real, wrong answer
+  // that looked plausible). DB returns items out of amount order on purpose here,
+  // to prove the sort — not the cap alone — is what selects the right one.
+  const mock = mockRunSequence([[
+    { ID: 'O1', items: [{ PRODUCT: 'cheap', AMOUNT: 10 }, { PRODUCT: 'expensive', AMOUNT: 999 }, { PRODUCT: 'mid', AMOUNT: 50 }] },
+  ]]);
+  try {
+    const rows = await executeDescriptor(
+      {
+        entity: 'Orders', select: ['ID'],
+        expand: [{ assoc: 'items', select: ['PRODUCT', 'AMOUNT'], orderBy: 'AMOUNT', orderDir: 'DESC', limit: 1 }],
+      },
+      schema, {}
+    );
+    assert.deepEqual(rows[0].items, [{ PRODUCT: 'expensive', AMOUNT: 999 }]);
+  } finally {
+    mock.restore();
+  }
+});
+
+test('expand orderBy rejects an association path — only a plain column is supported', async () => {
+  const capture = captureQuery();
+  try {
+    await assert.rejects(
+      () => executeDescriptor(
+        { entity: 'Orders', select: ['ID'], expand: [{ assoc: 'items', orderBy: 'productRef.NAME' }] },
+        schema, {}
+      ),
+      /orderBy "productRef\.NAME" must be a plain column/
+    );
+  } finally {
+    capture.restore();
+  }
+});
+
 test('nested expand is allowed when the nested association is to-one', async () => {
   const capture = captureQuery();
   try {
