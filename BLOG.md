@@ -221,15 +221,21 @@ Customers [Customers]
   joins:   "orders"→Orders(ID=CUSTOMER_ID,LEFT,toMany)
   searchable: NAME, NOTES
 Orders [Orders]
-  columns: ID:String, CUSTOMER_ID:String, AMOUNT:Decimal{pairs with CURRENCY — always select both together},
-           CURRENCY:String["Currency code (e.g. USD, EUR) — never SUM/AVG/MIN/MAX this column"],
-           STATUS:String{values: open="O",closed="C" — selecting STATUS alone ALSO gets you STATUS_text automatically},
-           ORDER_DATE:Date
+  columns: ID:String, CUSTOMER_ID:String, AMOUNT:Decimal{pairs with CURRENCY — always select both together}, CURRENCY:String["Currency code (e.g. USD, EUR) — a text code, never numeric. Never SUM/AVG/MIN/MAX this column — aggregate AMOUNT instead."], STATUS:String{values: open="O",closed="C" — use the raw value in filters. Selecting "STATUS" alone ALSO gets you a "STATUS_text" business-term field in every result row, with NO extra effort: do not select "STATUS_text" yourself (it is not a real column, you cannot select it — it just appears in the output), and do not add your own "caseWhen" to relabel "STATUS" (you would create a duplicate/conflicting column with the one already added for you)}, ORDER_DATE:Date
   joins:   "customer"→Customers(CUSTOMER_ID=ID,INNER), "items"→OrderItems(ID=ORDER_ID,LEFT,toMany)
+OrderItems [OrderItems]
+  columns: ID:String, ORDER_ID:String, PRODUCT_ID:String, PRODUCT:String, QTY:Integer, STATUS:String{values: pending="P",shipped="S" — use the raw value in filters. Selecting "STATUS" alone ALSO gets you a "STATUS_text" business-term field in every result row, with NO extra effort: do not select "STATUS_text" yourself (it is not a real column, you cannot select it — it just appears in the output), and do not add your own "caseWhen" to relabel "STATUS" (you would create a duplicate/conflicting column with the one already added for you)}
+  joins:   "product"→Products(PRODUCT_ID=ID,INNER)
+Products [Products]
+  columns: ID:String, NAME:String, SECRET:String, STATUS:String{values: active="A",discontinued="D" — use the raw value in filters. Selecting "STATUS" alone ALSO gets you a "STATUS_text" business-term field in every result row, with NO extra effort: do not select "STATUS_text" yourself (it is not a real column, you cannot select it — it just appears in the output), and do not add your own "caseWhen" to relabel "STATUS" (you would create a duplicate/conflicting column with the one already added for you)}
 Accounts [Accounts]
-  columns: ID:String, NAME:String, PARENT_ID:String, STATUS:String{values: active="A",closed="X"}
-  joins:   "parent"→Accounts(PARENT_ID=ID,INNER){self-referencing — hierarchy},
-           "children"→Accounts(ID=PARENT_ID,LEFT,toMany){self-referencing — hierarchy}
+  columns: ID:String, NAME:String, PARENT_ID:String, STATUS:String{values: active="A",closed="X" — use the raw value in filters. Selecting "STATUS" alone ALSO gets you a "STATUS_text" business-term field in every result row, with NO extra effort: do not select "STATUS_text" yourself (it is not a real column, you cannot select it — it just appears in the output), and do not add your own "caseWhen" to relabel "STATUS" (you would create a duplicate/conflicting column with the one already added for you)}
+  joins:   "parent"→Accounts(PARENT_ID=ID,INNER){self-referencing — hierarchy}, "children"→Accounts(ID=PARENT_ID,LEFT,toMany){self-referencing — hierarchy}
+Sectors [Sectors]
+  columns: CODE:String, DESCRIPTION:String
+Loans [Loans]
+  columns: ID:String, DTI:Decimal[0..50], SECTOR:String{readable text available via "sector.DESCRIPTION" — include it in select to show the human-readable value, AND use this path (not the raw "SECTOR" column) when the question filters by a human term like "active"/"closed"/"overdue" rather than a raw code}
+  joins:   "sector"→Sectors(SECTOR=CODE,INNER)
 WorkAssignments [WorkAssignments] [temporal: valid from validFrom to validTo]
   columns: ID:String, EMPLOYEE:String, ROLE:String, validFrom:Date, validTo:Date
 ```
