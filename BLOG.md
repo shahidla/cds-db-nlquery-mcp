@@ -1,4 +1,4 @@
-# Natural Language Queries for SAP CAP: The LLM Translates, CDS Executes
+# Natural Language Queries for SAP CAP via MCP: The LLM Translates, CDS Executes
 
 **An MCP server that turns plain-English questions into real CDS queries against your SAP CAP database layer — automatic JOINs, schema-driven disambiguation, five minutes to configure.**
 
