@@ -59,8 +59,9 @@ consistent correct total every time, where pre-fix runs had varied across at
 least four different wrong outcomes (two different incorrect totals, a false
 "no rows" answer, and the raw HANA error above) across repeated attempts.
 
-`npm test`: 126 passed, 0 failed (123 from v0.7.0 + 2 new regression tests for
-this fix). `npm run lint`: clean.
+`npm test`: 126 passed, 0 failed (123 from v0.7.0 + 3 new regression tests
+across both fixes — 2 in 0.7.1, 1 more in 0.7.2 broadening the same check).
+`npm run lint`: clean.
 
 ---
 
