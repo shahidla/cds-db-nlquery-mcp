@@ -45,6 +45,9 @@
   th, td { border: 1px solid #d0d7de; padding: 0.5rem 0.8rem; text-align: left; }
   th { background: #f6f8fa; }
   blockquote { border-left: 3px solid #d0d7de; margin: 1rem 0; padding: 0.2rem 1rem; color: #57606a; }
+  .del { color: #d1242f; text-decoration: line-through; }
+  .add { color: #1a7f37; font-weight: 500; }
+  .edit-note { display: inline-block; font-size: 0.72em; font-weight: 700; letter-spacing: 0.03em; text-transform: uppercase; color: #9a6700; background: rgba(154,103,0,0.12); border-radius: 4px; padding: 0.1em 0.4em; margin: 0 0.3em; vertical-align: middle; }
   @media (prefers-color-scheme: dark) {
     body { background: #0d1117; color: #e6edf3; }
     h2 { border-top-color: #30363d; }
@@ -54,14 +57,17 @@
     th, td { border-color: #30363d; }
     th { background: #161b22; }
     blockquote { border-left-color: #30363d; color: #8b949e; }
+    .del { color: #ff7b72; }
+    .add { color: #3fb950; }
+    .edit-note { color: #d4a72c; background: rgba(212,167,44,0.15); }
   }
 </style>
 </head>
 <body>
 <h1>Natural Language Queries for SAP CAP via MCP: The LLM Translates, CDS Executes</h1>
-<p><strong>An MCP server that turns plain-English questions into real CDS queries against your SAP CAP database layer. Automatic JOINs, schema-driven disambiguation, five minutes to configure.</strong></p>
-<p>If you work with SAP CAP projects, you know the drill: a business question comes in, you open your SQL editor, figure out which tables hold the answer, work out the JOINs and filter conditions, and 20 minutes later you have a result. Ask a slightly different question and you start over.</p>
-<p>What if you could just <em>ask</em>?</p>
+<p><span class="edit-note">marketing tone</span><strong><span class="del">An MCP server that turns plain-English questions into real CDS queries against your SAP CAP database layer. Automatic JOINs, schema-driven disambiguation, five minutes to configure.</span> <span class="add">An MCP server that turns plain-English questions into CDS queries against your SAP CAP database layer, using schema annotations to resolve JOINs and disambiguate values.</span></strong></p>
+<p><span class="edit-note">marketing tone</span><span class="del">If you work with SAP CAP projects, you know the drill: a business question comes in, you open your SQL editor, figure out which tables hold the answer, work out the JOINs and filter conditions, and 20 minutes later you have a result. Ask a slightly different question and you start over.</span> <span class="add">If you work with SAP CAP projects: a business question comes in, you open your SQL editor, figure out which tables hold the answer, and work out the JOINs and filter conditions. Ask a slightly different question and you start over.</span></p>
+<p><span class="edit-note">marketing tone</span><span class="del">What if you could just <em>ask</em>?</span> <span class="add">This MCP server lets you ask the question directly instead.</span></p>
 <pre><code>Which customers have a DTI ratio above 5?
 </code></pre>
 <p>And get this back:</p>
@@ -107,13 +113,13 @@ Customer   : Domestic Customer AU 4
 </code></pre>
 <hr>
 <h2>Why This Isn&#39;t &quot;LLM Writes SQL&quot;</h2>
-<p>Most natural-language-to-SQL demos work the same way: dump the whole database schema into a prompt, ask the LLM to write SQL, run whatever comes back. That&#39;s fast to build and brittle to run. The LLM has to get table names, JOIN syntax, and HANA-specific SQL right in one shot, with no framework checking its work.</p>
+<p><span class="edit-note">critical of others</span><span class="del">Most natural-language-to-SQL demos work the same way: dump the whole database schema into a prompt, ask the LLM to write SQL, run whatever comes back. That&#39;s fast to build and brittle to run.</span> <span class="add">One common pattern for natural-language-to-SQL works by dumping the whole database schema into a prompt, asking the LLM to write SQL, and running whatever comes back.</span> The LLM has to get table names, JOIN syntax, and HANA-specific SQL right in one shot, with no framework checking its work.</p>
 <p>This package splits the problem in two:</p>
 <ol>
 <li><strong>The LLM&#39;s only job is translation.</strong> It reads your CDS schema and turns a question into a small JSON descriptor: entity, columns, filters. It never writes SQL.</li>
 <li><strong>The CDS framework&#39;s only job is execution.</strong> It turns that descriptor into a CQN query (CDS&#39;s own query representation) using association-path expressions, and lets CDS, not the LLM, not hand-written SQL, generate the actual SQL JOINs that HANA executes.</li>
 </ol>
-<p>That division matters because it&#39;s where most &quot;AI + database&quot; tools quietly fail: doing JOINs in JavaScript after fetching too much data, or trusting the LLM to write syntactically valid HANA SQL from scratch. Neither happens here. There&#39;s no JavaScript-side join, no post-fetch filtering. <code>WHERE</code>, <code>ORDER BY</code>, and <code>LIMIT</code> are all pushed down to HANA in a single round-trip per question.</p>
+<p><span class="edit-note">critical of others</span><span class="del">That division matters because it&#39;s where most &quot;AI + database&quot; tools quietly fail: doing JOINs in JavaScript after fetching too much data, or trusting the LLM to write syntactically valid HANA SQL from scratch. Neither happens here.</span> <span class="add">That division matters: two common failure modes are doing JOINs in JavaScript after fetching too much data, or trusting the LLM to write syntactically valid HANA SQL from scratch. This server avoids both.</span> There&#39;s no JavaScript-side join, no post-fetch filtering. <code>WHERE</code>, <code>ORDER BY</code>, and <code>LIMIT</code> are all pushed down to HANA in a single round-trip per question.</p>
 <hr>
 <h2>Three-Stage Architecture</h2>
 <pre><code>You: &quot;Show me active loans for customers in the mining sector,
@@ -171,7 +177,7 @@ BU_TYPE : String(2);
 <p>Without that label, <code>BU_TYPE</code> is just a two-character string column to the LLM, and &quot;type code&quot; columns get mistaken for name columns constantly, because the LLM has no way to know what the values mean. The label isn&#39;t decoration; it&#39;s the only channel you have to tell the model what NOT to do with a column. The same mechanism handles join direction (<code>@NLP.joinType: &#39;LEFT&#39;</code> when cardinality alone is ambiguous) and aliasing (<code>@NLP.alias</code>).</p>
 <p>None of this touches your OData service or Fiori UI. <code>@NLP.label</code> is a CDS annotation the server reads at schema-load time and nothing else consumes.</p>
 <hr>
-<h2>Configuration: 5 Minutes to Running</h2>
+<h2><span class="edit-note">marketing tone</span><span class="del">Configuration: 5 Minutes to Running</span> <span class="add">Configuration</span></h2>
 <pre><code class="language-bash">npm install @shahid.la/cds-db-nlquery-mcp
 </code></pre>
 <p>Create <code>.mcp.json</code> in your CAP project root:</p>
@@ -428,10 +434,10 @@ Collateral Breakdown:
 
 [+ 2 more loans from the wider training portfolio, outside the named demo customers]
 </code></pre>
-<p>This is the example I&#39;d point a skeptical architect to first. Plenty of &quot;NL to SQL&quot; demos can do Example 1. Fewer can resolve a coded value-help table correctly. Almost none handle a column-to-column comparison across an association path, because that requires the framework, not the LLM, to actually understand JOIN semantics. And the per-asset-not-per-loan result is itself a useful, honest reminder of what the descriptor format can and can&#39;t express today: it has no <code>SUM</code>/<code>GROUP BY</code>, so &quot;is this loan&#39;s <em>combined</em> collateral sufficient&quot; is a question for the LLM answering over the raw rows, not something the query itself computes.</p>
+<p><span class="edit-note">critical of others</span><span class="del">This is the example I&#39;d point a skeptical architect to first. Plenty of &quot;NL to SQL&quot; demos can do Example 1. Fewer can resolve a coded value-help table correctly. Almost none handle a column-to-column comparison across an association path, because that requires the framework, not the LLM, to actually understand JOIN semantics.</span> <span class="add">This example is the most demanding of the three: it resolves a coded value-help table and performs a column-to-column comparison across an association path, which requires the framework, not the LLM, to understand JOIN semantics.</span> And the per-asset-not-per-loan result is itself a useful, honest reminder of what the descriptor format can and can&#39;t express today: it has no <code>SUM</code>/<code>GROUP BY</code>, so &quot;is this loan&#39;s <em>combined</em> collateral sufficient&quot; is a question for the LLM answering over the raw rows, not something the query itself computes.</p>
 <hr>
 <h2>Beyond the Three Examples: Four More Capabilities With Real Output</h2>
-<p>The Banking Sentinel examples cover the pattern most NL-to-SQL tools can handle: simple filter, coded value-help JOIN, column-to-column comparison. Here&#39;s what else the descriptor format supports, each shown against the <a href="https://github.com/shahidla/cds-db-nlquery-mcp/tree/main/examples/capability-demo">capability demo schema</a> with output captured by running <code>node examples/capability-demo/generate.js</code> against a real in-memory database.</p>
+<p><span class="edit-note">critical of others</span><span class="del">The Banking Sentinel examples cover the pattern most NL-to-SQL tools can handle: simple filter, coded value-help JOIN, column-to-column comparison.</span> <span class="add">The Banking Sentinel examples cover three patterns: simple filter, coded value-help JOIN, and column-to-column comparison.</span> Here&#39;s what else the descriptor format supports, each shown against the <a href="https://github.com/shahidla/cds-db-nlquery-mcp/tree/main/examples/capability-demo">capability demo schema</a> with output captured by running <code>node examples/capability-demo/generate.js</code> against a real in-memory database.</p>
 <hr>
 <h3>Nested Reads</h3>
 <p><strong>Question:</strong> <em>&quot;Orders with their line items nested inside&quot;</em></p>
@@ -516,7 +522,7 @@ ID : O5   Customer : C3 (Initech)      Amount :  150.00
 <p>Same architectural promise as before: the LLM picks which of these to use and fills in the JSON, CDS turns it into real CQN, the server never writes SQL by hand.</p>
 <hr>
 <h2>Built by Testing Against Real HANA, Not Just an In-Memory Database</h2>
-<p>Here&#39;s the part most &quot;look what my MCP server can do&quot; posts skip: a comprehensive unit test suite (126 tests) passed the entire time these capabilities were broken in a specific, real way. The tests used an in-memory SQLite-style adapter that tolerates things real HANA doesn&#39;t. The only way to actually know whether this worked was to deploy the demo schema to a real HANA Cloud instance and run every query against it for real. So that&#39;s what I did, repeatedly, across one extended session, and it caught real bugs:</p>
+<p><span class="edit-note">critical of others</span><span class="del">Here&#39;s the part most &quot;look what my MCP server can do&quot; posts skip: a comprehensive unit test suite (126 tests) passed the entire time these capabilities were broken in a specific, real way.</span> <span class="add">A comprehensive unit test suite (126 tests) passed the entire time these capabilities were broken in a specific, real way.</span> The tests used an in-memory SQLite-style adapter that tolerates things real HANA doesn&#39;t. The only way to actually know whether this worked was to deploy the demo schema to a real HANA Cloud instance and run every query against it for real. So that&#39;s what I did, repeatedly, across one extended session, and it caught real bugs:</p>
 <ul>
 <li>A real NL question, &quot;show me each customer&#39;s single largest order,&quot; surfaced that <code>expand</code>&#39;s <code>orderBy</code>/<code>limit</code> (for &quot;top N per group&quot;) wasn&#39;t implemented at all. The row cap applied, but nothing sorted first, so the result could silently be an arbitrary order instead of the actual largest one. Fixed by sorting before truncating. That fix, plus the existing enum-to-text translation and blocked-column stripping, all shared one unexamined assumption: each only ever checked <code>Array.isArray()</code> on a nested value. A follow-up systematic audit, deliberately constructing a two-level <code>expand</code> test, not a natural-language question this time, found all three silently skipped a nested value entirely whenever it was a plain object (a <code>to-one</code> association) instead of an array.</li>
 <li>A descriptor with an unrecognized field (an LLM wrote <code>{&quot;notExists&quot;: &quot;orders&quot;}</code> as a sibling of <code>&quot;where&quot;</code> instead of inside it) was silently ignored rather than rejected. The query ran with no filter applied at all, returning every row instead of failing loudly.</li>
@@ -556,7 +562,7 @@ ID : O5   Customer : C3 (Initech)      Amount :  150.00
 <h2>Try It</h2>
 <pre><code class="language-bash">npm install @shahid.la/cds-db-nlquery-mcp
 </code></pre>
-<p>Add the <code>.mcp.json</code> block above, point it at a CAP project with a few <code>@NLP.label</code> annotations, and ask it something you&#39;d otherwise have opened a SQL editor for. The first time a three-table JOIN with a coded value-help comes back correctly from a plain English question, you&#39;ll see why this is worth the five minutes of setup.</p>
+<p><span class="edit-note">marketing tone</span><span class="del">Add the <code>.mcp.json</code> block above, point it at a CAP project with a few <code>@NLP.label</code> annotations, and ask it something you&#39;d otherwise have opened a SQL editor for. The first time a three-table JOIN with a coded value-help comes back correctly from a plain English question, you&#39;ll see why this is worth the five minutes of setup.</span> <span class="add">Add the <code>.mcp.json</code> block above, point it at a CAP project with a few <code>@NLP.label</code> annotations, and ask it something you&#39;d otherwise have opened a SQL editor for.</span></p>
 <p>Want to verify all of this yourself before trusting it with something that matters, rather than trusting this post? Clone the repo, deploy <code>examples/capability-demo/</code>&#39;s schema to your own database, and run <code>validate-deployment.js</code>, <code>ask.js</code>, <code>ask-batch.js</code>, and <code>smoke-test-server.js</code>, the same scripts that found and confirmed every fix described above.</p>
 <p>Find the project on <strong><a href="https://github.com/shahidla/cds-db-nlquery-mcp">GitHub</a></strong> and <strong><a href="https://www.npmjs.com/package/@shahid.la/cds-db-nlquery-mcp">npm</a></strong>.</p>
 <p>Feedback, issues, and PRs welcome, especially real-world schema patterns and annotation edge cases.</p>
