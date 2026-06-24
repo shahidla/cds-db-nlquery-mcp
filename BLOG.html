@@ -1,0 +1,596 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Natural Language Queries for SAP CAP via MCP: The LLM Translates, CDS Executes</title>
+<meta name="description" content="An MCP server that turns plain-English questions into real CDS queries against your SAP CAP database layer — automatic JOINs, schema-driven disambiguation, five minutes to configure.">
+<style>
+  :root {
+    color-scheme: light dark;
+  }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+    line-height: 1.65;
+    max-width: 800px;
+    margin: 0 auto;
+    padding: 2.5rem 1.5rem 5rem;
+    color: #1f2328;
+    background: #fff;
+  }
+  h1 { font-size: 1.9rem; line-height: 1.3; margin-bottom: 0.3rem; }
+  h2 { font-size: 1.4rem; margin-top: 2.5rem; border-top: 1px solid #e1e4e8; padding-top: 1.5rem; }
+  h3 { font-size: 1.15rem; margin-top: 1.8rem; }
+  p, ul, ol, table { margin-top: 0.9rem; margin-bottom: 0.9rem; }
+  hr { display: none; }
+  code {
+    font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+    font-size: 0.88em;
+    background: rgba(175,184,193,0.2);
+    padding: 0.15em 0.4em;
+    border-radius: 4px;
+  }
+  pre {
+    background: #f6f8fa;
+    border-radius: 8px;
+    padding: 1rem 1.2rem;
+    overflow-x: auto;
+    font-size: 0.85em;
+    line-height: 1.5;
+  }
+  pre code { background: none; padding: 0; font-size: 1em; }
+  a { color: #0969da; text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  table { border-collapse: collapse; width: 100%; }
+  th, td { border: 1px solid #d0d7de; padding: 0.5rem 0.8rem; text-align: left; }
+  th { background: #f6f8fa; }
+  blockquote { border-left: 3px solid #d0d7de; margin: 1rem 0; padding: 0.2rem 1rem; color: #57606a; }
+  @media (prefers-color-scheme: dark) {
+    body { background: #0d1117; color: #e6edf3; }
+    h2 { border-top-color: #30363d; }
+    code { background: rgba(110,118,129,0.4); }
+    pre { background: #161b22; }
+    a { color: #58a6ff; }
+    th, td { border-color: #30363d; }
+    th { background: #161b22; }
+    blockquote { border-left-color: #30363d; color: #8b949e; }
+  }
+</style>
+</head>
+<body>
+<h1>Natural Language Queries for SAP CAP via MCP: The LLM Translates, CDS Executes</h1>
+<p><strong>An MCP server that turns plain-English questions into real CDS queries against your SAP CAP database layer — automatic JOINs, schema-driven disambiguation, five minutes to configure.</strong></p>
+<p>If you work with SAP CAP projects, you know the drill: a business question comes in, you open your SQL editor, figure out which tables hold the answer, work out the JOINs and filter conditions, and 20 minutes later you have a result. Ask a slightly different question and you start over.</p>
+<p>What if you could just <em>ask</em>?</p>
+<pre><code>Which customers have a DTI ratio above 5?
+</code></pre>
+<p>And get this back:</p>
+<pre><code>Results: 3 rows
+
+Partner    : 30100003
+DTI Ratio  : 7.20
+Customer   : Domestic Customer AU 3
+
+Partner    : 30100001
+DTI Ratio  : 5.80
+Customer   : Domestic Customer AU 1
+
+Partner    : 30100004
+DTI Ratio  : 5.40
+Customer   : Domestic Customer AU 4
+</code></pre>
+<p>That&#39;s what <strong><a href="https://github.com/shahidla/cds-db-nlquery-mcp">cds-db-nlquery-mcp</a></strong> does. It&#39;s an MCP server that sits on top of your SAP CAP project and lets you query your database-layer entities — the ones defined in <code>db/schema.cds</code>, not your OData service layer — in natural language, from Claude Code, Claude Desktop, or any MCP-compatible host.</p>
+<p>Here&#39;s how it works, why it&#39;s architected this way, and three real examples against a live HANA Cloud schema.</p>
+<hr>
+<h2>How It Works, At a Glance</h2>
+<pre><code> Your question (plain English)
+        │
+        ▼
+ ┌────────────────────────┐
+ │ Stage 1 — LLM           │  reads your CDS schema (labels, associations,
+ │ Question → Descriptor   │  @Common.Text, enums) → outputs JSON only:
+ └─────────┬───────────────┘  { entity, select, where, valCol, limit }
+           │  JSON descriptor
+           ▼
+ ┌────────────────────────┐
+ │ Stage 2 — CDS           │  descriptor → CQN → real SQL JOINs,
+ │ Descriptor → SQL        │  generated from association metadata —
+ └─────────┬───────────────┘  not guessed by the LLM
+           │  rows from HANA
+           ▼
+ ┌────────────────────────┐
+ │ Stage 3 — Answer        │  MCP client renders the rows, or hands them
+ │ Rows → Plain English    │  to a second LLM call to phrase the answer
+ └────────────────────────┘
+
+   The LLM never touches SQL. CDS never touches your question.
+</code></pre>
+<hr>
+<h2>Why This Isn&#39;t &quot;LLM Writes SQL&quot;</h2>
+<p>Most natural-language-to-SQL demos work the same way: dump the whole database schema into a prompt, ask the LLM to write SQL, run whatever comes back. That&#39;s fast to build and brittle to run — the LLM has to get table names, JOIN syntax, and HANA-specific SQL right in one shot, with no framework checking its work.</p>
+<p>This package splits the problem in two:</p>
+<ol>
+<li><strong>The LLM&#39;s only job is translation.</strong> It reads your CDS schema and turns a question into a small JSON descriptor — entity, columns, filters. It never writes SQL.</li>
+<li><strong>The CDS framework&#39;s only job is execution.</strong> It turns that descriptor into a CQN query (CDS&#39;s own query representation) using association-path expressions, and lets CDS — not the LLM, not hand-written SQL — generate the actual SQL JOINs that HANA executes.</li>
+</ol>
+<p>That division matters because it&#39;s where most &quot;AI + database&quot; tools quietly fail: doing JOINs in JavaScript after fetching too much data, or trusting the LLM to write syntactically valid HANA SQL from scratch. Neither happens here. There&#39;s no JavaScript-side join, no post-fetch filtering — <code>WHERE</code>, <code>ORDER BY</code>, and <code>LIMIT</code> are all pushed down to HANA in a single round-trip per question.</p>
+<hr>
+<h2>Three-Stage Architecture</h2>
+<pre><code>You: &quot;Show me active loans for customers in the mining sector,
+      with the borrower&#39;s name and loan amount&quot;
+</code></pre>
+<h3>Stage 1: Question → JSON Descriptor</h3>
+<p>At startup, the server loads your full CDS model and builds a compact schema description — entity names, columns with types, labels, enums, <code>@Common.Text</code> references, and association paths. That schema text plus your question goes to a fast, cheap model tier (<code>claude-haiku-4-5-20251001</code>, <code>gpt-4o-mini</code>, or any configured provider). The LLM responds with a descriptor, not SQL:</p>
+<pre><code class="language-json">{
+  &quot;entity&quot;: &quot;Loans&quot;,
+  &quot;select&quot;: [&quot;LOAN_ID&quot;, &quot;AMOUNT&quot;, &quot;customer.BU_SORT1&quot;, &quot;status.TEXT&quot;],
+  &quot;where&quot;: [
+    { &quot;col&quot;: &quot;customer.SECTOR_CODE&quot;, &quot;op&quot;: &quot;=&quot;, &quot;val&quot;: &quot;MINING&quot; },
+    { &quot;col&quot;: &quot;status.TEXT&quot;, &quot;op&quot;: &quot;like&quot;, &quot;val&quot;: &quot;Active&quot; }
+  ],
+  &quot;limit&quot;: 50
+}
+</code></pre>
+<p>This is a cheap LLM call — a structured-output translation task, not a reasoning task. The model isn&#39;t answering your question; it&#39;s mapping it onto the schema vocabulary it was given.</p>
+<h3>Stage 2: Descriptor → CQN → SQL (CDS Generates the JOINs, Not the LLM)</h3>
+<p>The server takes that descriptor and builds <strong>one</strong> CDS CQN query. <code>customer.BU_SORT1</code> and <code>status.TEXT</code> are CDS association paths — the server resolves them against the schema&#39;s join metadata and CDS compiles them into real SQL JOINs:</p>
+<pre><code class="language-sql">SELECT
+  L.LOAN_ID,
+  L.AMOUNT,
+  BP.BU_SORT1   AS customer_BU_SORT1,
+  LSC.TEXT      AS status_TEXT
+FROM bankingsentinel_Loans L
+INNER JOIN bankingsentinel_BusinessPartners BP  ON BP.PARTNER = L.PARTNER
+LEFT  JOIN bankingsentinel_LoanStatusCodes  LSC ON LSC.CODE    = L.STATUS
+WHERE UPPER(BP.SECTOR_CODE) = &#39;MINING&#39;
+  AND UPPER(LSC.TEXT) LIKE &#39;%ACTIVE%&#39;
+LIMIT 50
+</code></pre>
+<p>The JOINs are real, generated by CDS from association metadata you already declared in your schema — not reconstructed from scratch by an LLM guessing at foreign keys.</p>
+<h3>Stage 3: Results → Answer</h3>
+<p>The rows come back from <code>cds.run()</code> as plain objects. Your MCP client (Claude Code, Claude Desktop, etc.) renders them — or, as in the Banking Sentinel example later, hands them to a second, separate LLM call whose only job is to phrase the answer in plain English.</p>
+<hr>
+<h2>Wait — Is That Safe?</h2>
+<p>Right question. The server only ever issues <code>SELECT</code> — there is no code path that builds an INSERT, UPDATE, or DELETE. Beyond that, there are three independent layers, all enforced server-side, none of them optional:</p>
+<ol>
+<li><strong>Database-level</strong>: point <code>MCP_DB_USER</code>/<code>MCP_DB_PASSWORD</code> at a dedicated read-only HANA user. If the framework had a bug, HANA itself would still reject a write.</li>
+<li><strong>Entity allowlist</strong> (<code>MCP_ALLOWED_ENTITIES</code>): restricts which entities are queryable at all. This is enforced on the entity you asked for <strong>and</strong> on every entity reached through an association path — so allowlisting <code>BCA_DTI</code> but not <code>BusinessPartners</code> blocks <code>customer.BU_SORT1</code> from being selected at all, closing the obvious bypass-via-JOIN hole.</li>
+<li><strong>Column blocklist</strong> (<code>MCP_BLOCKED_COLUMNS</code>): strips named columns (e.g. <code>PASSWORD</code>, <code>EMBEDDING</code>, <code>SSN</code>) before the query is even built — they&#39;re never sent to HANA, not fetched-then-redacted.</li>
+</ol>
+<p>The one thing worth saying plainly, because the README says it plainly: <strong>this bypasses your CAP service-layer <code>@requires</code>/<code>@restrict</code> annotations.</strong> It queries <code>db/schema.cds</code> entities directly via <code>cds.run()</code>, not your OData service. If your service layer is where your authorization model lives, that model doesn&#39;t apply here — the three controls above are the substitute, not an addition.</p>
+<p>For a quick demo, start with none of them and everything is queryable. For anything pointed at real data, set all three.</p>
+<hr>
+<h2>The Real Lever: Schema Annotations, Not Prompt Engineering</h2>
+<p>Before the examples, this is the part that actually determines whether your queries come back right: <strong><code>@NLP.label</code></strong>.</p>
+<p>The server already reuses your existing <code>@title</code> annotations automatically — if your schema already has Fiori value-help labels, the LLM gets those for free. <code>@NLP.label</code> exists for the cases where <code>@title</code> doesn&#39;t fit or isn&#39;t disambiguating enough, and it overrides <code>@title</code> when both are present.</p>
+<p>Here&#39;s a real one from the schema you&#39;ll see in the examples below:</p>
+<pre><code class="language-cds">@title: &#39;Partner Type Code&#39;
+@NLP.label: &#39;Partner type code: 1=person, 2=organisation — NOT a name, never use for name lookups&#39;
+BU_TYPE : String(2);
+</code></pre>
+<p>Without that label, <code>BU_TYPE</code> is just a two-character string column to the LLM — and &quot;type code&quot; columns get mistaken for name columns constantly, because the LLM has no way to know what the values mean. The label isn&#39;t decoration; it&#39;s the only channel you have to tell the model what NOT to do with a column. The same mechanism handles join direction (<code>@NLP.joinType: &#39;LEFT&#39;</code> when cardinality alone is ambiguous) and aliasing (<code>@NLP.alias</code>).</p>
+<p>None of this touches your OData service or Fiori UI — <code>@NLP.label</code> is a CDS annotation the server reads at schema-load time and nothing else consumes.</p>
+<hr>
+<h2>Configuration: 5 Minutes to Running</h2>
+<pre><code class="language-bash">npm install @shahid.la/cds-db-nlquery-mcp
+</code></pre>
+<p>Create <code>.mcp.json</code> in your CAP project root:</p>
+<pre><code class="language-json">{
+  &quot;mcpServers&quot;: {
+    &quot;cds-db-nlquery-mcp&quot;: {
+      &quot;command&quot;: &quot;npx&quot;,
+      &quot;args&quot;: [&quot;-y&quot;, &quot;@shahid.la/cds-db-nlquery-mcp&quot;],
+      &quot;cwd&quot;: &quot;/absolute/path/to/your/cap/project&quot;,
+      &quot;env&quot;: {
+        &quot;ANTHROPIC_API_KEY&quot;: &quot;sk-ant-...&quot;,
+        &quot;ANTHROPIC_MODEL&quot;: &quot;claude-haiku-4-5-20251001&quot;
+      }
+    }
+  }
+}
+</code></pre>
+<p>Open the project in an MCP-aware client and ask a question. <code>LLM_PROVIDER</code> auto-detects from whichever API key is set, so for a quick start you only need the key.</p>
+<p><strong>Production env vars:</strong></p>
+<table>
+<thead>
+<tr>
+<th>Variable</th>
+<th>Default</th>
+<th>Purpose</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>MCP_ALLOWED_ENTITIES</code></td>
+<td>all entities</td>
+<td>Comma-separated entity allowlist — enforced on JOINs too</td>
+</tr>
+<tr>
+<td><code>MCP_BLOCKED_COLUMNS</code></td>
+<td>none</td>
+<td>Columns stripped before the query is built</td>
+</tr>
+<tr>
+<td><code>MCP_MAX_ROWS</code></td>
+<td>500</td>
+<td>Hard SQL <code>LIMIT</code> cap, server-side</td>
+</tr>
+<tr>
+<td><code>MCP_DB_USER</code> / <code>MCP_DB_PASSWORD</code></td>
+<td>inherits app&#39;s DB user</td>
+<td>Run as a separate, ideally read-only, HANA user</td>
+</tr>
+<tr>
+<td><code>MCP_MODEL_PATH</code></td>
+<td><code>db</code></td>
+<td>Where your CDS model lives, if not the default <code>db/</code></td>
+</tr>
+</tbody></table>
+<p><strong>LLM providers</strong>, today: Anthropic and OpenAI are first-class (<code>ANTHROPIC_API_KEY</code> / <code>OPENAI_API_KEY</code>). Everything else — Azure OpenAI, Groq, Ollama, local models — works through <code>OPENAI_BASE_URL</code> pointed at any OpenAI-compatible endpoint, not through a dedicated integration.</p>
+<hr>
+<h2>What the Server Reads From Your CDS Schema</h2>
+<p>Beyond <code>@title</code>/<code>@NLP.label</code> (covered above), several more things already in your schema do the rest of the work, none of them new annotations you&#39;d have to add just for this:</p>
+<ul>
+<li><strong>Associations</strong> — drive every JOIN; cardinality (<code>to-many</code> vs <code>to-one</code>) decides <code>LEFT</code> vs <code>INNER</code> automatically, and which <code>expand</code>/<code>hierarchy</code> shapes are even valid.</li>
+<li><strong><code>@Common.Text</code> and <code>@Common.ValueList</code></strong> — the standard SAP value-help patterns, reused so the LLM filters on human text instead of guessing codes, whether it&#39;s a small fixed enum or a large lookup table.</li>
+<li><strong>Native CDS <code>enum</code></strong> — surfaced to the LLM as <code>name=&quot;value&quot;</code> pairs, and translated back (<code>STATUS_text</code>) automatically in every result row — including inside nested <code>expand</code> results, recursively.</li>
+<li><strong>Calculated-on-read elements</strong> (<code>FULL = FIRST || &#39; &#39; || LAST</code>) — selectable like any stored column; the server substitutes the underlying expression itself rather than assuming the database materialized it as a physical column (confirmed it doesn&#39;t, on HANA).</li>
+<li><strong><code>@assert.range</code></strong> — surfaced as a sanity-bound hint, so the LLM can catch a likely unit/scale mismatch (a 0–1 ratio vs. a 0–100 percentage) before it emits a filter that trivially returns zero rows.</li>
+<li><strong><code>@cds.search</code></strong> and <strong><code>@cds.valid.from</code>/<code>@cds.valid.to</code></strong> — free-text search columns and temporal entities, both read directly from annotations you&#39;d already have for Fiori search bars and time-sliced data.</li>
+</ul>
+<p>This is why it doesn&#39;t feel like a generic SQL wrapper bolted onto your project: it&#39;s reading the same metadata your CDS model already carries for OData, Fiori value-help, and UI labels — just pointed at a different consumer.</p>
+<p>To make this concrete, here&#39;s the exact text <code>buildSchemaPrompt()</code> produces for the <a href="https://github.com/shahidla/cds-db-nlquery-mcp/tree/main/examples/capability-demo">capability demo schema</a> — this is what the LLM planner sees for every question:</p>
+<pre><code>Customers [Customers]
+  columns: ID:String, NAME:String[&quot;Customer Name&quot;], NOTES:String, FIRST:String, LAST:String, FULL:String[calculated]
+  joins:   &quot;orders&quot;→Orders(ID=CUSTOMER_ID,LEFT,toMany)
+  searchable: NAME, NOTES
+Orders [Orders]
+  columns: ID:String, CUSTOMER_ID:String, AMOUNT:Decimal{pairs with CURRENCY — always select both together}, CURRENCY:String[&quot;Currency code (e.g. USD, EUR) — a text code, never numeric. Never SUM/AVG/MIN/MAX this column — aggregate AMOUNT instead.&quot;], STATUS:String{values: open=&quot;O&quot;,closed=&quot;C&quot; — use the raw value in filters. Selecting &quot;STATUS&quot; alone ALSO gets you a &quot;STATUS_text&quot; business-term field in every result row, with NO extra effort: do not select &quot;STATUS_text&quot; yourself (it is not a real column, you cannot select it — it just appears in the output), and do not add your own &quot;caseWhen&quot; to relabel &quot;STATUS&quot; (you would create a duplicate/conflicting column with the one already added for you)}, ORDER_DATE:Date
+  joins:   &quot;customer&quot;→Customers(CUSTOMER_ID=ID,INNER), &quot;items&quot;→OrderItems(ID=ORDER_ID,LEFT,toMany)
+OrderItems [OrderItems]
+  columns: ID:String, ORDER_ID:String, PRODUCT_ID:String, PRODUCT:String, QTY:Integer, STATUS:String{values: pending=&quot;P&quot;,shipped=&quot;S&quot; — use the raw value in filters. Selecting &quot;STATUS&quot; alone ALSO gets you a &quot;STATUS_text&quot; business-term field in every result row, with NO extra effort: do not select &quot;STATUS_text&quot; yourself (it is not a real column, you cannot select it — it just appears in the output), and do not add your own &quot;caseWhen&quot; to relabel &quot;STATUS&quot; (you would create a duplicate/conflicting column with the one already added for you)}
+  joins:   &quot;product&quot;→Products(PRODUCT_ID=ID,INNER)
+Products [Products]
+  columns: ID:String, NAME:String, SECRET:String, STATUS:String{values: active=&quot;A&quot;,discontinued=&quot;D&quot; — use the raw value in filters. Selecting &quot;STATUS&quot; alone ALSO gets you a &quot;STATUS_text&quot; business-term field in every result row, with NO extra effort: do not select &quot;STATUS_text&quot; yourself (it is not a real column, you cannot select it — it just appears in the output), and do not add your own &quot;caseWhen&quot; to relabel &quot;STATUS&quot; (you would create a duplicate/conflicting column with the one already added for you)}
+Accounts [Accounts]
+  columns: ID:String, NAME:String, PARENT_ID:String, STATUS:String{values: active=&quot;A&quot;,closed=&quot;X&quot; — use the raw value in filters. Selecting &quot;STATUS&quot; alone ALSO gets you a &quot;STATUS_text&quot; business-term field in every result row, with NO extra effort: do not select &quot;STATUS_text&quot; yourself (it is not a real column, you cannot select it — it just appears in the output), and do not add your own &quot;caseWhen&quot; to relabel &quot;STATUS&quot; (you would create a duplicate/conflicting column with the one already added for you)}
+  joins:   &quot;parent&quot;→Accounts(PARENT_ID=ID,INNER){self-referencing — hierarchy}, &quot;children&quot;→Accounts(ID=PARENT_ID,LEFT,toMany){self-referencing — hierarchy}
+Sectors [Sectors]
+  columns: CODE:String, DESCRIPTION:String
+Loans [Loans]
+  columns: ID:String, DTI:Decimal[0..50], SECTOR:String{readable text available via &quot;sector.DESCRIPTION&quot; — include it in select to show the human-readable value, AND use this path (not the raw &quot;SECTOR&quot; column) when the question filters by a human term like &quot;active&quot;/&quot;closed&quot;/&quot;overdue&quot; rather than a raw code}
+  joins:   &quot;sector&quot;→Sectors(SECTOR=CODE,INNER)
+WorkAssignments [WorkAssignments] [temporal: valid from validFrom to validTo]
+  columns: ID:String, EMPLOYEE:String, ROLE:String, validFrom:Date, validTo:Date
+</code></pre>
+<p>Entity names, column types, NLP labels, enum values with the auto-<code>STATUS_text</code> instruction, join cardinality, the <code>{self-referencing — hierarchy}</code> marker that enables hierarchy traversal, and the <code>[temporal: ...]</code> marker that enables <code>asOf</code> time-travel reads. The LLM doesn&#39;t infer any of this from column names — it reads it directly from what the schema reader extracted.</p>
+<hr>
+<h2>Three Real Examples</h2>
+<p>These run against the actual schema and seed data of <a href="https://github.com/shahidla/Banking-Sentinel">Banking Sentinel</a>, a demo SAP CAP + HANA Cloud project I use to exercise this package against a real, non-trivial schema (18 entities, multi-hop associations, coded value-help tables). Every descriptor and result below reflects that real schema — nothing is invented for the post.</p>
+<hr>
+<h3>Example 1 — Simple Filter Across One Association</h3>
+<p><strong>Question:</strong> <em>&quot;Which customers have a DTI ratio above 5?&quot;</em></p>
+<p><strong>Schema (the relevant slice):</strong></p>
+<pre><code class="language-cds">entity BCA_DTI {
+  key PARTNER : String(10);
+  DTI_RATIO   : Decimal(5,2);
+
+  customer : Association to BusinessPartners on customer.PARTNER = PARTNER;
+}
+
+@NLP.label: &#39;Customers and business partners — demo borrowers: 301xxxx, guarantors: 309xxxx&#39;
+entity BusinessPartners {
+  key PARTNER : String(10);
+  @title: &#39;Customer / Business Partner Name&#39;
+  BU_SORT1    : String(50);
+}
+</code></pre>
+<p><strong>Descriptor the LLM returns:</strong></p>
+<pre><code class="language-json">{
+  &quot;entity&quot;: &quot;BCA_DTI&quot;,
+  &quot;select&quot;: [&quot;PARTNER&quot;, &quot;DTI_RATIO&quot;, &quot;customer.BU_SORT1&quot;],
+  &quot;where&quot;: [{ &quot;col&quot;: &quot;DTI_RATIO&quot;, &quot;op&quot;: &quot;&gt;&quot;, &quot;val&quot;: 5 }],
+  &quot;orderBy&quot;: &quot;DTI_RATIO&quot;,
+  &quot;orderDir&quot;: &quot;DESC&quot;,
+  &quot;limit&quot;: 20
+}
+</code></pre>
+<p><strong>Result, against the live database:</strong></p>
+<pre><code>Results: 3 rows
+
+Partner    : 30100003
+DTI Ratio  : 7.20
+Customer   : Domestic Customer AU 3
+
+Partner    : 30100001
+DTI Ratio  : 5.80
+Customer   : Domestic Customer AU 1
+
+Partner    : 30100004
+DTI Ratio  : 5.40
+Customer   : Domestic Customer AU 4
+</code></pre>
+<p>One association (<code>customer</code>), one JOIN, one filter. This is the floor — every query, however complex, starts from this same mechanism.</p>
+<hr>
+<h3>Example 2 — Coded Values via <code>@Common.Text</code> (Not Guessing the Raw Code)</h3>
+<p><strong>Question:</strong> <em>&quot;Show me active loans for customers in the mining sector, with the borrower&#39;s name and loan amount.&quot;</em></p>
+<p>This question has a trap: &quot;active&quot; and &quot;mining sector&quot; are both <em>human</em> terms over <em>coded</em> columns. <code>Loans.STATUS</code> is stored as a single character (<code>&#39;A&#39;</code>/<code>&#39;C&#39;</code>), not the word &quot;active.&quot; If the LLM guessed at the raw code, it would be wrong as often as it was right.</p>
+<p><strong>Schema:</strong></p>
+<pre><code class="language-cds">entity Loans {
+  key LOAN_ID   : String(15);
+  PARTNER       : String(10);
+  AMOUNT        : Decimal(15,2);
+  @Common.Text: status.TEXT
+  STATUS        : String(1);
+
+  customer : Association to BusinessPartners on customer.PARTNER = PARTNER;
+  status   : Association to LoanStatusCodes  on status.CODE     = STATUS;
+}
+
+// Adding a new status is a data INSERT into this table — never a schema/code change.
+entity LoanStatusCodes {
+  key CODE : String(1);
+  TEXT     : String(20);
+}
+
+entity BusinessPartners {
+  key PARTNER  : String(10);
+  BU_SORT1     : String(50);
+  SECTOR_CODE  : String(20);   // RETAIL_PROP, MINING, AGRICULTURE, ...
+}
+</code></pre>
+<p><code>@Common.Text: status.TEXT</code> is the standard SAP value-help pattern — the same one Fiori uses to show &quot;Active&quot; in a dropdown while storing <code>&#39;A&#39;</code>. The schema reader tells the LLM this path exists; the system prompt instructs it to filter on <code>status.TEXT</code> directly rather than invent a raw code.</p>
+<p><strong>Descriptor the LLM returns:</strong></p>
+<pre><code class="language-json">{
+  &quot;entity&quot;: &quot;Loans&quot;,
+  &quot;select&quot;: [&quot;LOAN_ID&quot;, &quot;AMOUNT&quot;, &quot;customer.BU_SORT1&quot;, &quot;status.TEXT&quot;],
+  &quot;where&quot;: [
+    { &quot;col&quot;: &quot;customer.SECTOR_CODE&quot;, &quot;op&quot;: &quot;=&quot;, &quot;val&quot;: &quot;MINING&quot; },
+    { &quot;col&quot;: &quot;status.TEXT&quot;, &quot;op&quot;: &quot;like&quot;, &quot;val&quot;: &quot;Active&quot; }
+  ],
+  &quot;limit&quot;: 50
+}
+</code></pre>
+<p><strong>Result:</strong></p>
+<pre><code>Results: 1 row
+
+Loan ID    : L-009
+Amount     : AUD 3,200,000.00
+Customer   : Domestic Customer AU 9
+Status     : Active
+</code></pre>
+<p>If the bank adds a new loan status next quarter (<code>PENDING_REVIEW = &#39;P&#39;</code>), this query keeps working without a code change — it&#39;s matching on text, not a hardcoded code the LLM would otherwise have had to memorize.</p>
+<hr>
+<h3>Example 3 — Column-to-Column Comparison Across Two Hops (<code>valCol</code>)</h3>
+<p><strong>Question:</strong> <em>&quot;Which loans are under-collateralized — where the pledged collateral is worth less than the loan amount?&quot;</em></p>
+<p>This is qualitatively different from the first two: it&#39;s not comparing a column to a value the user typed, it&#39;s comparing <strong>two columns from different entities</strong> to each other. There&#39;s no literal to filter on.</p>
+<p><strong>Schema:</strong></p>
+<pre><code class="language-cds">entity BCA_COLLATERAL {
+  key LOAN_ID   : String(15);
+  key COLLAT_ID : String(15);
+  COLLAT_TYPE   : String(10);   // PROPERTY, VEHICLE, CASH
+  VALUE         : Decimal(15,2);
+
+  loan : Association to Loans on loan.LOAN_ID = LOAN_ID;
+}
+
+entity Loans {
+  key LOAN_ID : String(15);
+  AMOUNT      : Decimal(15,2);
+  customer    : Association to BusinessPartners on customer.PARTNER = PARTNER;
+}
+</code></pre>
+<p>The descriptor format supports <code>valCol</code> for exactly this — comparing a column to another column (a path, possibly through a JOIN) instead of to a literal <code>val</code>:</p>
+<pre><code class="language-json">{
+  &quot;entity&quot;: &quot;BCA_COLLATERAL&quot;,
+  &quot;select&quot;: [&quot;COLLAT_TYPE&quot;, &quot;VALUE&quot;, &quot;loan.LOAN_ID&quot;, &quot;loan.PARTNER&quot;, &quot;loan.customer.BU_SORT1&quot;, &quot;loan.AMOUNT&quot;],
+  &quot;where&quot;: [
+    { &quot;col&quot;: &quot;VALUE&quot;, &quot;op&quot;: &quot;&lt;&quot;, &quot;valCol&quot;: &quot;loan.AMOUNT&quot; }
+  ],
+  &quot;orderBy&quot;: &quot;loan.LOAN_ID&quot;,
+  &quot;limit&quot;: 50
+}
+</code></pre>
+<p><code>loan.customer.BU_SORT1</code> is a two-hop path — <code>BCA_COLLATERAL → loan → Loans → customer → BusinessPartners</code> — resolved in the same single query, no extra round-trip. The generated <code>WHERE</code> clause is <code>WHERE COLLAT.VALUE &lt; L.AMOUNT</code>, a real cross-table comparison, not two separate queries reconciled in JavaScript.</p>
+<p><strong>Raw result: 10 rows.</strong> Worth pausing on why it&#39;s 10 and not fewer — the comparison is <strong>per pledged asset</strong>, not per loan. A loan secured by both a property and a cash deposit produces two collateral rows, and each is compared to the <em>full</em> loan amount individually. That&#39;s the literal, correct answer to &quot;which pledged assets are worth less than the loan&quot; — it just means a multi-asset loan can appear more than once, even when its combined collateral would be adequate.</p>
+<p>That&#39;s exactly where Stage 3 earns its place. The MCP server hands back those 10 flat rows; the second LLM call (the one that turns MCP results into an answer) grouped them by loan and computed the shortfall itself:</p>
+<pre><code>10 under-collateralized loan records identified (collateral value &lt; loan amount):
+
+Loan L-004 (Partner: 30100003, Domestic Customer AU 3)
+Loan Amount: AUD 2,100,000.00
+Total Collateral Value: AUD 1,480,000.00
+Shortfall: AUD 620,000.00
+Collateral Breakdown:
+  Property: AUD 1,200,000.00
+  Cash: AUD 280,000.00
+
+Loan L-006 (Partner: 30100005, Domestic Customer AU 5)
+Loan Amount: AUD 1,850,000.00
+Total Collateral Value: AUD 1,300,000.00
+Shortfall: AUD 550,000.00
+Collateral Breakdown:
+  Property: AUD 1,100,000.00
+  Cash: AUD 200,000.00
+
+Loan L-007 (Partner: 30100006, Domestic Customer AU 6)
+Loan Amount: AUD 45,000.00
+Total Collateral Value: AUD 35,000.00
+Shortfall: AUD 10,000.00
+Collateral Breakdown:
+  Vehicle: AUD 35,000.00
+
+Loan L-009 (Partner: 30100009, Domestic Customer AU 9)
+Loan Amount: AUD 3,200,000.00
+Total Collateral Value: AUD 2,400,000.00
+Shortfall: AUD 800,000.00
+Collateral Breakdown:
+  Property: AUD 2,000,000.00
+  Cash: AUD 400,000.00
+
+[+ 2 more loans from the wider training portfolio, outside the named demo customers]
+</code></pre>
+<p>This is the example I&#39;d point a skeptical architect to first. Plenty of &quot;NL to SQL&quot; demos can do Example 1. Fewer can resolve a coded value-help table correctly. Almost none handle a column-to-column comparison across an association path, because that requires the framework — not the LLM — to actually understand JOIN semantics. And the per-asset-not-per-loan result is itself a useful, honest reminder of what the descriptor format can and can&#39;t express today: it has no <code>SUM</code>/<code>GROUP BY</code>, so &quot;is this loan&#39;s <em>combined</em> collateral sufficient&quot; is a question for the LLM answering over the raw rows, not something the query itself computes.</p>
+<hr>
+<h2>Beyond the Three Examples: Four More Capabilities With Real Output</h2>
+<p>The Banking Sentinel examples cover the pattern most NL-to-SQL tools can handle: simple filter, coded value-help JOIN, column-to-column comparison. Here&#39;s what else the descriptor format supports, each shown against the <a href="https://github.com/shahidla/cds-db-nlquery-mcp/tree/main/examples/capability-demo">capability demo schema</a> with output captured by running <code>node examples/capability-demo/generate.js</code> against a real in-memory database.</p>
+<hr>
+<h3>Nested Reads</h3>
+<p><strong>Question:</strong> <em>&quot;Orders with their line items nested inside&quot;</em></p>
+<pre><code class="language-json">{
+  &quot;entity&quot;: &quot;Orders&quot;,
+  &quot;select&quot;: [&quot;ID&quot;, &quot;CUSTOMER_ID&quot;],
+  &quot;expand&quot;: [{ &quot;assoc&quot;: &quot;items&quot;, &quot;select&quot;: [&quot;PRODUCT&quot;, &quot;QTY&quot;] }]
+}
+</code></pre>
+<p><strong>Result:</strong></p>
+<pre><code class="language-json">[
+  { &quot;ID&quot;: &quot;O1&quot;, &quot;CUSTOMER_ID&quot;: &quot;C1&quot;, &quot;items&quot;: [{&quot;PRODUCT&quot;:&quot;Widget&quot;,&quot;QTY&quot;:10},{&quot;PRODUCT&quot;:&quot;Gadget&quot;,&quot;QTY&quot;:5}] },
+  { &quot;ID&quot;: &quot;O2&quot;, &quot;CUSTOMER_ID&quot;: &quot;C1&quot;, &quot;items&quot;: [{&quot;PRODUCT&quot;:&quot;Widget&quot;,&quot;QTY&quot;:20}] },
+  { &quot;ID&quot;: &quot;O3&quot;, &quot;CUSTOMER_ID&quot;: &quot;C2&quot;, &quot;items&quot;: [{&quot;PRODUCT&quot;:&quot;Gizmo&quot;,&quot;QTY&quot;:3}] },
+  { &quot;ID&quot;: &quot;O4&quot;, &quot;CUSTOMER_ID&quot;: &quot;C2&quot;, &quot;items&quot;: [] },
+  ...
+]
+</code></pre>
+<p>One query. Each parent row carries its children as a real nested array — not a flattened, duplicated-parent-row JOIN result. <code>expand</code> supports <code>orderBy</code>/<code>limit</code> on the nested side (e.g. &quot;each order&#39;s single largest line item by quantity&quot;) and nests recursively to any depth.</p>
+<hr>
+<h3>Recursive Hierarchy</h3>
+<p><strong>Question:</strong> <em>&quot;All descendants of account A1 — the full org tree below it&quot;</em></p>
+<pre><code class="language-json">{
+  &quot;entity&quot;: &quot;Accounts&quot;,
+  &quot;select&quot;: [&quot;ID&quot;, &quot;NAME&quot;, &quot;PARENT_ID&quot;],
+  &quot;hierarchy&quot;: {
+    &quot;assoc&quot;: &quot;children&quot;,
+    &quot;direction&quot;: &quot;descendants&quot;,
+    &quot;startWhere&quot;: [{ &quot;col&quot;: &quot;ID&quot;, &quot;op&quot;: &quot;=&quot;, &quot;val&quot;: &quot;A1&quot; }]
+  }
+}
+</code></pre>
+<p><strong>Result:</strong></p>
+<pre><code>ID : A1   Name : Holding Co          Parent : —    Status : active
+ID : A2   Name : Regional Division   Parent : A1   Status : active
+ID : A3   Name : Local Branch North  Parent : A2   Status : active
+ID : A4   Name : Local Branch South  Parent : A2   Status : closed
+ID : A5   Name : Sub Branch North-1  Parent : A3   Status : active
+</code></pre>
+<p>Five levels from a single question. The <code>STATUS_text</code> translation (raw <code>&quot;A&quot;</code> → <code>&quot;active&quot;</code>, <code>&quot;X&quot;</code> → <code>&quot;closed&quot;</code>) applies automatically, including on hierarchy results. A fixed-depth association path (<code>account.parent.parent.NAME</code>) cannot express an unbounded tree walk — <code>hierarchy</code> can, capped by a configurable max depth.</p>
+<hr>
+<h3>Window Functions</h3>
+<p><strong>Question:</strong> <em>&quot;Each customer&#39;s single largest order&quot;</em></p>
+<pre><code class="language-json">{
+  &quot;entity&quot;: &quot;Orders&quot;,
+  &quot;select&quot;: [&quot;ID&quot;, &quot;CUSTOMER_ID&quot;, &quot;AMOUNT&quot;],
+  &quot;window&quot;: [{ &quot;fn&quot;: &quot;rank&quot;, &quot;as&quot;: &quot;RANK&quot;, &quot;partitionBy&quot;: [&quot;CUSTOMER_ID&quot;], &quot;orderBy&quot;: [{ &quot;col&quot;: &quot;AMOUNT&quot;, &quot;dir&quot;: &quot;DESC&quot; }] }],
+  &quot;windowFilter&quot;: [{ &quot;col&quot;: &quot;RANK&quot;, &quot;op&quot;: &quot;=&quot;, &quot;val&quot;: 1 }]
+}
+</code></pre>
+<p>CDS generates the subquery wrapping that <code>HAVING</code> alone can&#39;t express:</p>
+<pre><code class="language-sql">SELECT ID, CUSTOMER_ID, AMOUNT, RANK
+FROM (
+  SELECT ID, CUSTOMER_ID, AMOUNT,
+         rank() OVER (PARTITION BY CUSTOMER_ID ORDER BY AMOUNT DESC) AS RANK
+  FROM Orders
+) WHERE RANK = 1
+LIMIT 50
+</code></pre>
+<p><strong>Result:</strong></p>
+<pre><code>ID : O2   Customer : C1 (Acme Corp)    Amount : 2300.50
+ID : O4   Customer : C2 (Globex Inc)   Amount : 4200.00
+ID : O5   Customer : C3 (Initech)      Amount :  150.00
+</code></pre>
+<p>One row per customer, the actual largest order — not a <code>MAX()</code> that loses the order ID. Running totals, lag/lead, and <code>row_number</code> follow the same pattern.</p>
+<hr>
+<h3>Time-Travel Reads</h3>
+<p>Two questions, same entity, different answers:</p>
+<p><strong>&quot;What was Alice&#39;s role on 2026-02-15?&quot;</strong></p>
+<pre><code class="language-json">{ &quot;entity&quot;: &quot;WorkAssignments&quot;, &quot;select&quot;: [&quot;EMPLOYEE&quot;, &quot;ROLE&quot;],
+  &quot;where&quot;: [{ &quot;col&quot;: &quot;EMPLOYEE&quot;, &quot;op&quot;: &quot;=&quot;, &quot;val&quot;: &quot;Alice&quot; }],
+  &quot;asOf&quot;: &quot;2026-02-15&quot; }
+</code></pre>
+<p>→ <code>ROLE: Analyst</code></p>
+<p><strong>&quot;What is Alice&#39;s current role?&quot;</strong></p>
+<pre><code class="language-json">{ &quot;entity&quot;: &quot;WorkAssignments&quot;, &quot;select&quot;: [&quot;EMPLOYEE&quot;, &quot;ROLE&quot;],
+  &quot;where&quot;: [{ &quot;col&quot;: &quot;EMPLOYEE&quot;, &quot;op&quot;: &quot;=&quot;, &quot;val&quot;: &quot;Alice&quot; }] }
+</code></pre>
+<p>→ <code>ROLE: Senior Analyst</code></p>
+<p><code>@cds.valid.from</code>/<code>@cds.valid.to</code> entities work automatically — the server adds the <code>validFrom &lt;= date AND validTo &gt; date</code> filter for <code>asOf</code>, or defaults to now when no date is given. No annotation beyond what you&#39;d already add for Fiori time-sliced data.</p>
+<hr>
+<p>Same architectural promise as before: the LLM picks which of these to use and fills in the JSON, CDS turns it into real CQN, the server never writes SQL by hand.</p>
+<hr>
+<h2>Built by Testing Against Real HANA, Not Just an In-Memory Database</h2>
+<p>Here&#39;s the part most &quot;look what my MCP server can do&quot; posts skip: a comprehensive
+unit test suite (123 tests) passed the entire time these capabilities were
+broken in a specific, real way. The tests used an in-memory SQLite-style adapter
+that tolerates things real HANA doesn&#39;t. The only way to actually know whether
+this worked was to deploy the demo schema to a real HANA Cloud instance and run
+every query against it for real — so that&#39;s what I did, repeatedly, across one
+extended session, and it caught real bugs:</p>
+<ul>
+<li>A real NL question — &quot;show me each customer&#39;s single largest order&quot; —
+surfaced that <code>expand</code>&#39;s <code>orderBy</code>/<code>limit</code> (for &quot;top N per group&quot;) wasn&#39;t
+implemented at all: the row cap applied, but nothing sorted first, so the
+result could silently be an arbitrary order instead of the actual largest
+one. Fixed by sorting before truncating. That fix, plus the existing
+enum-to-text translation and blocked-column stripping, all shared one
+unexamined assumption: each only ever checked <code>Array.isArray()</code> on a nested
+value. A follow-up systematic audit — deliberately constructing a two-level
+<code>expand</code> test, not a natural-language question this time — found all three
+silently skipped a nested value entirely whenever it was a plain object (a
+<code>to-one</code> association) instead of an array.</li>
+<li>A descriptor with an unrecognized field (an LLM wrote <code>{&quot;notExists&quot;: &quot;orders&quot;}</code>
+as a sibling of <code>&quot;where&quot;</code> instead of inside it) was silently ignored rather
+than rejected — the query ran with no filter applied at all, returning every
+row instead of failing loudly.</li>
+<li>The legacy <code>@sap/hana-client</code>-based HANA runtime (still the default most
+CAP+HANA projects use) silently drops the <code>OVER</code> clause from a window-function
+query — no error, just wrong SQL, until HANA itself throws a syntax error
+downstream. Confirmed the CQN this package generates is <em>correct</em> per CAP&#39;s
+current standard (the same shape <code>@cap-js/sqlite</code> and the modern <code>@cap-js/hana</code>
+adapter both render properly) — only the legacy runtime mishandles it. The
+server now detects which adapter is connected and only restricts behavior on
+the legacy one; on a modern adapter, the same query just works.</li>
+</ul>
+<p>Every one of these was found, root-caused, and fixed by actually deploying
+<code>examples/capability-demo/</code>&#39;s schema to live HANA and running real queries
+against it — not by reading the code harder. The four scripts that do this
+live in that folder in the GitHub repo (they&#39;re development/testing tools, not
+part of the published npm package — <code>npm install</code> only gives you <code>src/</code>), ready
+to run, not just described:</p>
+<ul>
+<li><code>validate-deployment.js</code> — runs every hand-written descriptor against your deployment and compares rows to the SQLite-generated <code>results.json</code> baseline, no LLM involved — the definitive check for whether execution is correct on your specific backend and adapter.</li>
+<li><code>ask.js</code> — runs a single natural-language question end-to-end through a real LLM against your deployment; useful for questions the pre-built list doesn&#39;t cover.</li>
+<li><code>ask-batch.js</code> — runs every pre-built question&#39;s natural-language text (not the hand-written descriptor) through a real LLM and compares the result — the script that actually distinguishes &quot;the package is wrong&quot; from &quot;the model picked an odd column,&quot; and the one that surfaced real, fixable mistakes across two different models (Claude and DeepSeek).</li>
+<li><code>smoke-test-server.js</code> — unlike the other three (which call internal functions via <code>require()</code>), this spawns <code>src/mcp-server.js</code> as a real child process and drives it through the MCP stdio protocol the same way Claude Code or <code>npx</code> actually would — used to confirm that what&#39;s correct at the library level is also correct at the published-artifact level.</li>
+</ul>
+<p>If you&#39;re evaluating this for something that matters, don&#39;t take the examples
+above on faith — clone the repo, deploy <code>examples/capability-demo/</code> to your own
+HANA, and run these scripts yourself.</p>
+<hr>
+<h2>What Happens When the LLM Gets It Wrong</h2>
+<p>All three examples above are success cases — worth being honest about the failure path too. If the LLM&#39;s response doesn&#39;t parse as JSON, or comes back without an <code>entity</code> field, the server rejects it outright rather than guessing or silently running a degraded query. The same applies to an entity or column outside <code>MCP_ALLOWED_ENTITIES</code>, or one that doesn&#39;t exist in your schema at all — each produces a clear error back to the MCP client, not a best-effort result you&#39;d have to double-check. There&#39;s no fallback path that quietly does something different from what you asked.</p>
+<hr>
+<h2>When to Use This (and When Not To)</h2>
+<p><strong>Good fit:</strong></p>
+<ul>
+<li>Ad-hoc data exploration during development or support investigations</li>
+<li>Audit/compliance spot-checks — &quot;show me all loans without collateral where LTV exceeds 80%&quot;</li>
+<li>Operational questions that change shape every time, so a fixed report doesn&#39;t fit</li>
+</ul>
+<p><strong>Not a fit:</strong></p>
+<ul>
+<li>Anything user-facing — this bypasses <code>@requires</code>/<code>@restrict</code>; use your OData service for that</li>
+<li>Scheduled/repeated reporting — this is exploratory, not a BI tool</li>
+<li>Any write path — read-only by design, no exceptions</li>
+</ul>
+<p><strong>Database compatibility:</strong></p>
+<ul>
+<li>Tested on HANA Cloud (BTP) with both adapters CDS supports: <code>@cap-js/hana</code> (all capabilities work, including window functions and <code>viaFiltered</code>-inside-aggregate) and the legacy <code>@sap/hana-client</code> runtime (those two specific things are rejected with a clear error; everything else works). Not tested on on-premise classic HANA.</li>
+</ul>
+<hr>
+<h2>Try It</h2>
+<pre><code class="language-bash">npm install @shahid.la/cds-db-nlquery-mcp
+</code></pre>
+<p>Add the <code>.mcp.json</code> block above, point it at a CAP project with a few <code>@NLP.label</code> annotations, and ask it something you&#39;d otherwise have opened a SQL editor for. The first time a three-table JOIN with a coded value-help comes back correctly from a plain English question, you&#39;ll see why this is worth the five minutes of setup.</p>
+<p>Want to verify all of this yourself before trusting it with something that matters, rather than trusting this post? Clone the repo, deploy <code>examples/capability-demo/</code>&#39;s schema to your own database, and run <code>validate-deployment.js</code>, <code>ask.js</code>, <code>ask-batch.js</code>, and <code>smoke-test-server.js</code> — the same scripts that found and confirmed every fix described above.</p>
+<p>Find the project on <strong><a href="https://github.com/shahidla/cds-db-nlquery-mcp">GitHub</a></strong> and <strong><a href="https://www.npmjs.com/package/@shahid.la/cds-db-nlquery-mcp">npm</a></strong>.</p>
+<p>Feedback, issues, and PRs welcome — especially real-world schema patterns and annotation edge cases.</p>
+</body>
+</html>
