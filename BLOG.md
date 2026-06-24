@@ -1,6 +1,6 @@
-# Ask Your SAP HANA Database Questions in Plain English — No SQL Required
+# Natural Language Queries for SAP CAP via MCP: The LLM Translates, CDS Executes
 
-**An MCP server that turns natural language questions into real CDS queries — with automatic SQL JOINs, schema-driven disambiguation, and minimal configuration — against your existing SAP CAP db-layer entities.**
+**An MCP server that turns plain-English questions into real CDS queries against your SAP CAP database layer — automatic JOINs, schema-driven disambiguation, five minutes to configure.**
 
 If you work with SAP CAP projects, you know the drill: a business question comes in, you open your SQL editor, figure out which tables hold the answer, work out the JOINs and filter conditions, and 20 minutes later you have a result. Ask a slightly different question and you start over.
 
@@ -84,7 +84,7 @@ You: "Show me active loans for customers in the mining sector,
 
 ### Stage 1: Question → JSON Descriptor
 
-At startup, the server loads your full CDS model and builds a compact schema description — entity names, columns with types, labels, enums, `@Common.Text` references, and association paths. That schema text plus your question goes to a small LLM (Claude Haiku, GPT-4o-mini, or any configured provider). The LLM responds with a descriptor, not SQL:
+At startup, the server loads your full CDS model and builds a compact schema description — entity names, columns with types, labels, enums, `@Common.Text` references, and association paths. That schema text plus your question goes to a fast, cheap model tier (`claude-haiku-4-5-20251001`, `gpt-4o-mini`, or any configured provider). The LLM responds with a descriptor, not SQL:
 
 ```json
 {
@@ -200,6 +200,50 @@ Open the project in an MCP-aware client and ask a question. `LLM_PROVIDER` auto-
 
 ---
 
+## What the Server Reads From Your CDS Schema
+
+Beyond `@title`/`@NLP.label` (covered above), several more things already in your schema do the rest of the work, none of them new annotations you'd have to add just for this:
+
+- **Associations** — drive every JOIN; cardinality (`to-many` vs `to-one`) decides `LEFT` vs `INNER` automatically, and which `expand`/`hierarchy` shapes are even valid.
+- **`@Common.Text` and `@Common.ValueList`** — the standard SAP value-help patterns, reused so the LLM filters on human text instead of guessing codes, whether it's a small fixed enum or a large lookup table.
+- **Native CDS `enum`** — surfaced to the LLM as `name="value"` pairs, and translated back (`STATUS_text`) automatically in every result row — including inside nested `expand` results, recursively.
+- **Calculated-on-read elements** (`FULL = FIRST || ' ' || LAST`) — selectable like any stored column; the server substitutes the underlying expression itself rather than assuming the database materialized it as a physical column (confirmed it doesn't, on HANA).
+- **`@assert.range`** — surfaced as a sanity-bound hint, so the LLM can catch a likely unit/scale mismatch (a 0–1 ratio vs. a 0–100 percentage) before it emits a filter that trivially returns zero rows.
+- **`@cds.search`** and **`@cds.valid.from`/`@cds.valid.to`** — free-text search columns and temporal entities, both read directly from annotations you'd already have for Fiori search bars and time-sliced data.
+
+This is why it doesn't feel like a generic SQL wrapper bolted onto your project: it's reading the same metadata your CDS model already carries for OData, Fiori value-help, and UI labels — just pointed at a different consumer.
+
+To make this concrete, here's the exact text `buildSchemaPrompt()` produces for the [capability demo schema](https://github.com/shahidla/cds-db-nlquery-mcp/tree/main/examples/capability-demo) — this is what the LLM planner sees for every question:
+
+```
+Customers [Customers]
+  columns: ID:String, NAME:String["Customer Name"], NOTES:String, FIRST:String, LAST:String, FULL:String[calculated]
+  joins:   "orders"→Orders(ID=CUSTOMER_ID,LEFT,toMany)
+  searchable: NAME, NOTES
+Orders [Orders]
+  columns: ID:String, CUSTOMER_ID:String, AMOUNT:Decimal{pairs with CURRENCY — always select both together}, CURRENCY:String["Currency code (e.g. USD, EUR) — a text code, never numeric. Never SUM/AVG/MIN/MAX this column — aggregate AMOUNT instead."], STATUS:String{values: open="O",closed="C" — use the raw value in filters. Selecting "STATUS" alone ALSO gets you a "STATUS_text" business-term field in every result row, with NO extra effort: do not select "STATUS_text" yourself (it is not a real column, you cannot select it — it just appears in the output), and do not add your own "caseWhen" to relabel "STATUS" (you would create a duplicate/conflicting column with the one already added for you)}, ORDER_DATE:Date
+  joins:   "customer"→Customers(CUSTOMER_ID=ID,INNER), "items"→OrderItems(ID=ORDER_ID,LEFT,toMany)
+OrderItems [OrderItems]
+  columns: ID:String, ORDER_ID:String, PRODUCT_ID:String, PRODUCT:String, QTY:Integer, STATUS:String{values: pending="P",shipped="S" — use the raw value in filters. Selecting "STATUS" alone ALSO gets you a "STATUS_text" business-term field in every result row, with NO extra effort: do not select "STATUS_text" yourself (it is not a real column, you cannot select it — it just appears in the output), and do not add your own "caseWhen" to relabel "STATUS" (you would create a duplicate/conflicting column with the one already added for you)}
+  joins:   "product"→Products(PRODUCT_ID=ID,INNER)
+Products [Products]
+  columns: ID:String, NAME:String, SECRET:String, STATUS:String{values: active="A",discontinued="D" — use the raw value in filters. Selecting "STATUS" alone ALSO gets you a "STATUS_text" business-term field in every result row, with NO extra effort: do not select "STATUS_text" yourself (it is not a real column, you cannot select it — it just appears in the output), and do not add your own "caseWhen" to relabel "STATUS" (you would create a duplicate/conflicting column with the one already added for you)}
+Accounts [Accounts]
+  columns: ID:String, NAME:String, PARENT_ID:String, STATUS:String{values: active="A",closed="X" — use the raw value in filters. Selecting "STATUS" alone ALSO gets you a "STATUS_text" business-term field in every result row, with NO extra effort: do not select "STATUS_text" yourself (it is not a real column, you cannot select it — it just appears in the output), and do not add your own "caseWhen" to relabel "STATUS" (you would create a duplicate/conflicting column with the one already added for you)}
+  joins:   "parent"→Accounts(PARENT_ID=ID,INNER){self-referencing — hierarchy}, "children"→Accounts(ID=PARENT_ID,LEFT,toMany){self-referencing — hierarchy}
+Sectors [Sectors]
+  columns: CODE:String, DESCRIPTION:String
+Loans [Loans]
+  columns: ID:String, DTI:Decimal[0..50], SECTOR:String{readable text available via "sector.DESCRIPTION" — include it in select to show the human-readable value, AND use this path (not the raw "SECTOR" column) when the question filters by a human term like "active"/"closed"/"overdue" rather than a raw code}
+  joins:   "sector"→Sectors(SECTOR=CODE,INNER)
+WorkAssignments [WorkAssignments] [temporal: valid from validFrom to validTo]
+  columns: ID:String, EMPLOYEE:String, ROLE:String, validFrom:Date, validTo:Date
+```
+
+Entity names, column types, NLP labels, enum values with the auto-`STATUS_text` instruction, join cardinality, the `{self-referencing — hierarchy}` marker that enables hierarchy traversal, and the `[temporal: ...]` marker that enables `asOf` time-travel reads. The LLM doesn't infer any of this from column names — it reads it directly from what the schema reader extracted.
+
+---
+
 ## Three Real Examples
 
 These run against the actual schema and seed data of [Banking Sentinel](https://github.com/shahidla/Banking-Sentinel), a demo SAP CAP + HANA Cloud project I use to exercise this package against a real, non-trivial schema (18 entities, multi-hop associations, coded value-help tables). Every descriptor and result below reflects that real schema — nothing is invented for the post.
@@ -258,8 +302,6 @@ Partner    : 30100004
 DTI Ratio  : 5.40
 Customer   : Domestic Customer AU 4
 ```
-
-> **[SCREENSHOT PLACEHOLDER 1 — Claude Code: the question, MCP tool call, and these three rows]**
 
 One association (`customer`), one JOIN, one filter. This is the floor — every query, however complex, starts from this same mechanism.
 
@@ -324,8 +366,6 @@ Amount     : AUD 3,200,000.00
 Customer   : Domestic Customer AU 9
 Status     : Active
 ```
-
-> **[SCREENSHOT PLACEHOLDER 2 — Claude Code: question, descriptor visible in MCP server logs, and this result]**
 
 If the bank adds a new loan status next quarter (`PENDING_REVIEW = 'P'`), this query keeps working without a code change — it's matching on text, not a hardcoded code the LLM would otherwise have had to memorize.
 
@@ -413,39 +453,139 @@ Collateral Breakdown:
 [+ 2 more loans from the wider training portfolio, outside the named demo customers]
 ```
 
-> **[SCREENSHOT PLACEHOLDER 3 — Claude Code: question, descriptor showing the `valCol` field and the 10 raw rows in the MCP server logs, plus this aggregated answer]**
-
 This is the example I'd point a skeptical architect to first. Plenty of "NL to SQL" demos can do Example 1. Fewer can resolve a coded value-help table correctly. Almost none handle a column-to-column comparison across an association path, because that requires the framework — not the LLM — to actually understand JOIN semantics. And the per-asset-not-per-loan result is itself a useful, honest reminder of what the descriptor format can and can't express today: it has no `SUM`/`GROUP BY`, so "is this loan's *combined* collateral sufficient" is a question for the LLM answering over the raw rows, not something the query itself computes.
 
 ---
 
-## Beyond Filters: Aggregation, Hierarchy, Nested Reads, Window Functions
+## Beyond the Three Examples: Four More Capabilities With Real Output
 
-The three examples above were already true in earlier versions. Since then the
-descriptor format grew into a real query language — not by adding syntax for its
-own sake, but because each addition maps to a CQL capability CAP already
-supports and a real class of question:
+The Banking Sentinel examples cover the pattern most NL-to-SQL tools can handle: simple filter, coded value-help JOIN, column-to-column comparison. Here's what else the descriptor format supports, each shown against the [capability demo schema](https://github.com/shahidla/cds-db-nlquery-mcp/tree/main/examples/capability-demo) with output captured by running `node examples/capability-demo/generate.js` against a real in-memory database.
 
-- **Aggregation** — `"aggregate": [{"fn":"sum","col":"AMOUNT","as":"total"}]` +
-  `"groupBy"` + `"having"` — "total order amount per customer," "customers with
-  more than 5 loans."
-- **Nested reads (`expand`)** — "show me each order with its line items nested
-  inside" returns one parent row per order with a real nested array, not a
-  flattened, duplicated-parent-row JOIN result.
-- **Recursive hierarchy** — `"hierarchy": {"assoc":"children","direction":"descendants"}`
-  walks an unbounded self-referencing tree (org charts, account hierarchies) level
-  by level, capped by a configurable max depth — something a fixed-depth
-  `a.b.c.COL` path genuinely cannot express.
-- **Window functions** — `rank`, `row_number`, running totals, lag/lead, all with
-  `partitionBy`/`orderBy` — "rank each order by amount within its customer,"
-  "each customer's single largest order."
-- **`CASE WHEN`, `UNION`/`INTERSECT`/`EXCEPT`, temporal `asOf` queries** — labeling
-  rows by a computed condition, combining two different entities into one result
-  set, and time-travel reads against `@cds.valid.from`/`@cds.valid.to` entities.
+---
 
-Same architectural promise as before: the LLM picks which of these to use and
-fills in the JSON, CDS turns it into one real CQN query, the server never writes
-SQL by hand.
+### Nested Reads
+
+**Question:** *"Orders with their line items nested inside"*
+
+```json
+{
+  "entity": "Orders",
+  "select": ["ID", "CUSTOMER_ID"],
+  "expand": [{ "assoc": "items", "select": ["PRODUCT", "QTY"] }]
+}
+```
+
+**Result:**
+
+```json
+[
+  { "ID": "O1", "CUSTOMER_ID": "C1", "items": [{"PRODUCT":"Widget","QTY":10},{"PRODUCT":"Gadget","QTY":5}] },
+  { "ID": "O2", "CUSTOMER_ID": "C1", "items": [{"PRODUCT":"Widget","QTY":20}] },
+  { "ID": "O3", "CUSTOMER_ID": "C2", "items": [{"PRODUCT":"Gizmo","QTY":3}] },
+  { "ID": "O4", "CUSTOMER_ID": "C2", "items": [] },
+  ...
+]
+```
+
+One query. Each parent row carries its children as a real nested array — not a flattened, duplicated-parent-row JOIN result. `expand` supports `orderBy`/`limit` on the nested side (e.g. "each order's single largest line item by quantity") and nests recursively to any depth.
+
+---
+
+### Recursive Hierarchy
+
+**Question:** *"All descendants of account A1 — the full org tree below it"*
+
+```json
+{
+  "entity": "Accounts",
+  "select": ["ID", "NAME", "PARENT_ID"],
+  "hierarchy": {
+    "assoc": "children",
+    "direction": "descendants",
+    "startWhere": [{ "col": "ID", "op": "=", "val": "A1" }]
+  }
+}
+```
+
+**Result:**
+
+```
+ID : A1   Name : Holding Co          Parent : —    Status : active
+ID : A2   Name : Regional Division   Parent : A1   Status : active
+ID : A3   Name : Local Branch North  Parent : A2   Status : active
+ID : A4   Name : Local Branch South  Parent : A2   Status : closed
+ID : A5   Name : Sub Branch North-1  Parent : A3   Status : active
+```
+
+Five levels from a single question. The `STATUS_text` translation (raw `"A"` → `"active"`, `"X"` → `"closed"`) applies automatically, including on hierarchy results. A fixed-depth association path (`account.parent.parent.NAME`) cannot express an unbounded tree walk — `hierarchy` can, capped by a configurable max depth.
+
+---
+
+### Window Functions
+
+**Question:** *"Each customer's single largest order"*
+
+```json
+{
+  "entity": "Orders",
+  "select": ["ID", "CUSTOMER_ID", "AMOUNT"],
+  "window": [{ "fn": "rank", "as": "RANK", "partitionBy": ["CUSTOMER_ID"], "orderBy": [{ "col": "AMOUNT", "dir": "DESC" }] }],
+  "windowFilter": [{ "col": "RANK", "op": "=", "val": 1 }]
+}
+```
+
+CDS generates the subquery wrapping that `HAVING` alone can't express:
+
+```sql
+SELECT ID, CUSTOMER_ID, AMOUNT, RANK
+FROM (
+  SELECT ID, CUSTOMER_ID, AMOUNT,
+         rank() OVER (PARTITION BY CUSTOMER_ID ORDER BY AMOUNT DESC) AS RANK
+  FROM Orders
+) WHERE RANK = 1
+LIMIT 50
+```
+
+**Result:**
+
+```
+ID : O2   Customer : C1 (Acme Corp)    Amount : 2300.50
+ID : O4   Customer : C2 (Globex Inc)   Amount : 4200.00
+ID : O5   Customer : C3 (Initech)      Amount :  150.00
+```
+
+One row per customer, the actual largest order — not a `MAX()` that loses the order ID. Running totals, lag/lead, and `row_number` follow the same pattern.
+
+---
+
+### Time-Travel Reads
+
+Two questions, same entity, different answers:
+
+**"What was Alice's role on 2026-02-15?"**
+
+```json
+{ "entity": "WorkAssignments", "select": ["EMPLOYEE", "ROLE"],
+  "where": [{ "col": "EMPLOYEE", "op": "=", "val": "Alice" }],
+  "asOf": "2026-02-15" }
+```
+
+→ `ROLE: Analyst`
+
+**"What is Alice's current role?"**
+
+```json
+{ "entity": "WorkAssignments", "select": ["EMPLOYEE", "ROLE"],
+  "where": [{ "col": "EMPLOYEE", "op": "=", "val": "Alice" }] }
+```
+
+→ `ROLE: Senior Analyst`
+
+`@cds.valid.from`/`@cds.valid.to` entities work automatically — the server adds the `validFrom <= date AND validTo > date` filter for `asOf`, or defaults to now when no date is given. No annotation beyond what you'd already add for Fiori time-sliced data.
+
+---
+
+Same architectural promise as before: the LLM picks which of these to use and fills in the JSON, CDS turns it into real CQN, the server never writes SQL by hand.
 
 ---
 
@@ -490,25 +630,10 @@ live in that folder in the GitHub repo (they're development/testing tools, not
 part of the published npm package — `npm install` only gives you `src/`), ready
 to run, not just described:
 
-- `validate-deployment.js` — runs every example query directly against your
-  deployment and checks the results, no LLM involved.
-- `ask.js` — ask your own question against your deployment, end-to-end through
-  a real LLM.
-- `ask-batch.js` — runs every example question's *natural-language* text (not
-  the hand-written descriptor) through a real LLM and checks the result. This is
-  what actually separates "the package is wrong" from "the model picked an odd
-  column" — and it surfaced real, fixable mistakes in both categories, across
-  two different models (Claude and DeepSeek), not just one.
-- `smoke-test-server.js` — the other three call this package's internal
-  functions directly via `require()`. This one spawns `src/mcp-server.js` — the
-  actual published artifact — as a real child process and drives it through the
-  real MCP stdio protocol, the same way Claude Code or `npx` actually would.
-  Used this to chase down what looked like a real bug (a hierarchy query
-  silently falling back to a flat list, through this path specifically) — it
-  turned out to be a false alarm caused by incomplete debug logging in the
-  server itself, not an actual execution defect, but the only way to find that
-  out for certain was testing the real protocol path, not assuming the
-  internal-function tests covered it.
+- `validate-deployment.js` — runs every hand-written descriptor against your deployment and compares rows to the SQLite-generated `results.json` baseline, no LLM involved — the definitive check for whether execution is correct on your specific backend and adapter.
+- `ask.js` — runs a single natural-language question end-to-end through a real LLM against your deployment; useful for questions the pre-built list doesn't cover.
+- `ask-batch.js` — runs every pre-built question's natural-language text (not the hand-written descriptor) through a real LLM and compares the result — the script that actually distinguishes "the package is wrong" from "the model picked an odd column," and the one that surfaced real, fixable mistakes across two different models (Claude and DeepSeek).
+- `smoke-test-server.js` — unlike the other three (which call internal functions via `require()`), this spawns `src/mcp-server.js` as a real child process and drives it through the MCP stdio protocol the same way Claude Code or `npx` actually would — used to confirm that what's correct at the library level is also correct at the published-artifact level.
 
 If you're evaluating this for something that matters, don't take the examples
 above on faith — clone the repo, deploy `examples/capability-demo/` to your own
@@ -519,21 +644,6 @@ HANA, and run these scripts yourself.
 ## What Happens When the LLM Gets It Wrong
 
 All three examples above are success cases — worth being honest about the failure path too. If the LLM's response doesn't parse as JSON, or comes back without an `entity` field, the server rejects it outright rather than guessing or silently running a degraded query. The same applies to an entity or column outside `MCP_ALLOWED_ENTITIES`, or one that doesn't exist in your schema at all — each produces a clear error back to the MCP client, not a best-effort result you'd have to double-check. There's no fallback path that quietly does something different from what you asked.
-
----
-
-## What Else the Server Reads From Your CDS Model
-
-Beyond `@title`/`@NLP.label` (covered above), several more things already in your schema do the rest of the work, none of them new annotations you'd have to add just for this:
-
-- **Associations** — drive every JOIN; cardinality (`to-many` vs `to-one`) decides `LEFT` vs `INNER` automatically, and which `expand`/`hierarchy` shapes are even valid.
-- **`@Common.Text` and `@Common.ValueList`** — the standard SAP value-help patterns, reused so the LLM filters on human text instead of guessing codes, whether it's a small fixed enum or a large lookup table.
-- **Native CDS `enum`** — surfaced to the LLM as `name="value"` pairs, and translated back (`STATUS_text`) automatically in every result row — including inside nested `expand` results, recursively.
-- **Calculated-on-read elements** (`FULL = FIRST || ' ' || LAST`) — selectable like any stored column; the server substitutes the underlying expression itself rather than assuming the database materialized it as a physical column (confirmed it doesn't, on HANA).
-- **`@assert.range`** — surfaced as a sanity-bound hint, so the LLM can catch a likely unit/scale mismatch (a 0–1 ratio vs. a 0–100 percentage) before it emits a filter that trivially returns zero rows.
-- **`@cds.search`** and **`@cds.valid.from`/`@cds.valid.to`** — free-text search columns and temporal entities, both read directly from annotations you'd already have for Fiori search bars and time-sliced data.
-
-This is why it doesn't feel like a generic SQL wrapper bolted onto your project: it's reading the same metadata your CDS model already carries for OData, Fiori value-help, and UI labels — just pointed at a different consumer.
 
 ---
 
@@ -548,6 +658,9 @@ This is why it doesn't feel like a generic SQL wrapper bolted onto your project:
 - Anything user-facing — this bypasses `@requires`/`@restrict`; use your OData service for that
 - Scheduled/repeated reporting — this is exploratory, not a BI tool
 - Any write path — read-only by design, no exceptions
+
+**Database compatibility:**
+- Tested on HANA Cloud (BTP) with both adapters CDS supports: `@cap-js/hana` (all capabilities work, including window functions and `viaFiltered`-inside-aggregate) and the legacy `@sap/hana-client` runtime (those two specific things are rejected with a clear error; everything else works). Not tested on on-premise classic HANA.
 
 ---
 
