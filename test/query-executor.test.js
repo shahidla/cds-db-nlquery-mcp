@@ -253,6 +253,21 @@ test('a function-call string used as a plain "select" column is rejected, not le
   );
 });
 
+test('a function-call string with a trailing alias ("SUM(AMOUNT) AS TOTAL") is also rejected', async () => {
+  // Second real failure on the same query: the LLM widened its mistake to a full
+  // SQL fragment, alias included, which a strict "^FUNC(...)$" pattern would not
+  // catch since the string no longer ends right after the closing paren. The
+  // check was broadened to "contains a parenthesis anywhere" specifically to
+  // cover this and any other shape of the same underlying mistake.
+  await assert.rejects(
+    () => executeDescriptor(
+      { entity: 'Orders', select: ['SUM(AMOUNT) AS TOTAL_AMOUNT'] },
+      schema, {}
+    ),
+    /function-call syntax used as a plain column name.*SUM\(AMOUNT\) AS TOTAL_AMOUNT/
+  );
+});
+
 test('a function-call string used inside "where", "groupBy", "orderBy", "having", or "aggregate.col" is rejected the same way', async () => {
   await assert.rejects(
     () => executeDescriptor(

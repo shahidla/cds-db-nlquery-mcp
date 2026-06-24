@@ -798,8 +798,13 @@ async function executeDescriptor(descriptor, schema, callConfig = {}) {
   // happened. Reject up front, across every field a column-spec string can appear
   // in, with a message that names the actual fix instead of letting the native
   // HANA error surface.
-  const FUNC_CALL_PATTERN = /^[A-Za-z_][A-Za-z0-9_]*\s*\(.*\)$/;
-  const looksLikeFuncCall = s => typeof s === 'string' && FUNC_CALL_PATTERN.test(s.trim());
+  // Broadened from an exact "FUNC(...)" match after a second real failure: an LLM
+  // produced "SUM(AMOUNT) AS TOTAL_AMOUNT" (a full SQL fragment, alias included),
+  // which doesn't match a string that must *end* right after the closing paren.
+  // A plain column name or dotted association path never legitimately contains a
+  // parenthesis at all, so checking for "(" or ")" anywhere is both safe (no valid
+  // false positives) and catches every variant of this mistake, not just one shape.
+  const looksLikeFuncCall = s => typeof s === 'string' && /[()]/.test(s);
   const badFuncCallSpecs = [
     ...(select || []).filter(looksLikeFuncCall),
     ...collectWhereCols(where).filter(looksLikeFuncCall),
