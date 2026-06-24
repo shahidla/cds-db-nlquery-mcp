@@ -1,10 +1,10 @@
 # Natural Language Queries for SAP CAP via MCP: The LLM Translates, CDS Executes
 
-**An MCP server that turns plain-English questions into real CDS queries against your SAP CAP database layer. Automatic JOINs, schema-driven disambiguation, five minutes to configure.**
+**An MCP server that turns plain-English questions into CDS queries against your SAP CAP database layer, using schema annotations to resolve JOINs and disambiguate values.**
 
-If you work with SAP CAP projects, you know the drill: a business question comes in, you open your SQL editor, figure out which tables hold the answer, work out the JOINs and filter conditions, and 20 minutes later you have a result. Ask a slightly different question and you start over.
+If you work with SAP CAP projects: a business question comes in, you open your SQL editor, figure out which tables hold the answer, and work out the JOINs and filter conditions. Ask a slightly different question and you start over.
 
-What if you could just *ask*?
+This MCP server lets you ask the question directly instead.
 
 ```
 Which customers have a DTI ratio above 5?
@@ -64,14 +64,14 @@ Here's how it works, why it's architected this way, and three real examples agai
 
 ## Why This Isn't "LLM Writes SQL"
 
-Most natural-language-to-SQL demos work the same way: dump the whole database schema into a prompt, ask the LLM to write SQL, run whatever comes back. That's fast to build and brittle to run. The LLM has to get table names, JOIN syntax, and HANA-specific SQL right in one shot, with no framework checking its work.
+One common pattern for natural-language-to-SQL works by dumping the whole database schema into a prompt, asking the LLM to write SQL, and running whatever comes back. The LLM has to get table names, JOIN syntax, and HANA-specific SQL right in one shot, with no framework checking its work.
 
 This package splits the problem in two:
 
 1. **The LLM's only job is translation.** It reads your CDS schema and turns a question into a small JSON descriptor: entity, columns, filters. It never writes SQL.
 2. **The CDS framework's only job is execution.** It turns that descriptor into a CQN query (CDS's own query representation) using association-path expressions, and lets CDS, not the LLM, not hand-written SQL, generate the actual SQL JOINs that HANA executes.
 
-That division matters because it's where most "AI + database" tools quietly fail: doing JOINs in JavaScript after fetching too much data, or trusting the LLM to write syntactically valid HANA SQL from scratch. Neither happens here. There's no JavaScript-side join, no post-fetch filtering. `WHERE`, `ORDER BY`, and `LIMIT` are all pushed down to HANA in a single round-trip per question.
+That division matters: two common failure modes are doing JOINs in JavaScript after fetching too much data, or trusting the LLM to write syntactically valid HANA SQL from scratch. This server avoids both. There's no JavaScript-side join, no post-fetch filtering. `WHERE`, `ORDER BY`, and `LIMIT` are all pushed down to HANA in a single round-trip per question.
 
 ---
 
@@ -160,7 +160,7 @@ None of this touches your OData service or Fiori UI. `@NLP.label` is a CDS annot
 
 ---
 
-## Configuration: 5 Minutes to Running
+## Configuration
 
 ```bash
 npm install @shahid.la/cds-db-nlquery-mcp
@@ -453,13 +453,13 @@ Collateral Breakdown:
 [+ 2 more loans from the wider training portfolio, outside the named demo customers]
 ```
 
-This is the example I'd point a skeptical architect to first. Plenty of "NL to SQL" demos can do Example 1. Fewer can resolve a coded value-help table correctly. Almost none handle a column-to-column comparison across an association path, because that requires the framework, not the LLM, to actually understand JOIN semantics. And the per-asset-not-per-loan result is itself a useful, honest reminder of what the descriptor format can and can't express today: it has no `SUM`/`GROUP BY`, so "is this loan's *combined* collateral sufficient" is a question for the LLM answering over the raw rows, not something the query itself computes.
+This example is the most demanding of the three: it resolves a coded value-help table and performs a column-to-column comparison across an association path, which requires the framework, not the LLM, to understand JOIN semantics. And the per-asset-not-per-loan result is itself a useful, honest reminder of what the descriptor format can and can't express today: it has no `SUM`/`GROUP BY`, so "is this loan's *combined* collateral sufficient" is a question for the LLM answering over the raw rows, not something the query itself computes.
 
 ---
 
 ## Beyond the Three Examples: Four More Capabilities With Real Output
 
-The Banking Sentinel examples cover the pattern most NL-to-SQL tools can handle: simple filter, coded value-help JOIN, column-to-column comparison. Here's what else the descriptor format supports, each shown against the [capability demo schema](https://github.com/shahidla/cds-db-nlquery-mcp/tree/main/examples/capability-demo) with output captured by running `node examples/capability-demo/generate.js` against a real in-memory database.
+The Banking Sentinel examples cover three patterns: simple filter, coded value-help JOIN, and column-to-column comparison. Here's what else the descriptor format supports, each shown against the [capability demo schema](https://github.com/shahidla/cds-db-nlquery-mcp/tree/main/examples/capability-demo) with output captured by running `node examples/capability-demo/generate.js` against a real in-memory database.
 
 ---
 
@@ -591,7 +591,7 @@ Same architectural promise as before: the LLM picks which of these to use and fi
 
 ## Built by Testing Against Real HANA, Not Just an In-Memory Database
 
-Here's the part most "look what my MCP server can do" posts skip: a comprehensive unit test suite (126 tests) passed the entire time these capabilities were broken in a specific, real way. The tests used an in-memory SQLite-style adapter that tolerates things real HANA doesn't. The only way to actually know whether this worked was to deploy the demo schema to a real HANA Cloud instance and run every query against it for real. So that's what I did, repeatedly, across one extended session, and it caught real bugs:
+A comprehensive unit test suite (126 tests) passed the entire time these capabilities were broken in a specific, real way. The tests used an in-memory SQLite-style adapter that tolerates things real HANA doesn't. The only way to actually know whether this worked was to deploy the demo schema to a real HANA Cloud instance and run every query against it for real. So that's what I did, repeatedly, across one extended session, and it caught real bugs:
 
 - A real NL question, "show me each customer's single largest order," surfaced that `expand`'s `orderBy`/`limit` (for "top N per group") wasn't implemented at all. The row cap applied, but nothing sorted first, so the result could silently be an arbitrary order instead of the actual largest one. Fixed by sorting before truncating. That fix, plus the existing enum-to-text translation and blocked-column stripping, all shared one unexamined assumption: each only ever checked `Array.isArray()` on a nested value. A follow-up systematic audit, deliberately constructing a two-level `expand` test, not a natural-language question this time, found all three silently skipped a nested value entirely whenever it was a plain object (a `to-one` association) instead of an array.
 - A descriptor with an unrecognized field (an LLM wrote `{"notExists": "orders"}` as a sibling of `"where"` instead of inside it) was silently ignored rather than rejected. The query ran with no filter applied at all, returning every row instead of failing loudly.
@@ -638,7 +638,7 @@ All three examples above are success cases, worth being honest about the failure
 npm install @shahid.la/cds-db-nlquery-mcp
 ```
 
-Add the `.mcp.json` block above, point it at a CAP project with a few `@NLP.label` annotations, and ask it something you'd otherwise have opened a SQL editor for. The first time a three-table JOIN with a coded value-help comes back correctly from a plain English question, you'll see why this is worth the five minutes of setup.
+Add the `.mcp.json` block above, point it at a CAP project with a few `@NLP.label` annotations, and ask it something you'd otherwise have opened a SQL editor for.
 
 Want to verify all of this yourself before trusting it with something that matters, rather than trusting this post? Clone the repo, deploy `examples/capability-demo/`'s schema to your own database, and run `validate-deployment.js`, `ask.js`, `ask-batch.js`, and `smoke-test-server.js`, the same scripts that found and confirmed every fix described above.
 
