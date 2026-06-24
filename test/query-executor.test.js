@@ -239,6 +239,44 @@ test('aggregate/having with an ungrouped plain select column is rejected, not le
   );
 });
 
+test('a function-call string used as a plain "select" column is rejected, not left to crash in SQL', async () => {
+  // Found via real NL testing (Banking-Sentinel, "total loan amount across all
+  // customers"): an LLM put "SUM(AMOUNT)" directly into "select" instead of using
+  // the "aggregate" field. colRef() treats the whole string as a literal column
+  // name, and HANA rejects it with a cryptic "invalid column name: SUM(AMOUNT)".
+  await assert.rejects(
+    () => executeDescriptor(
+      { entity: 'Orders', select: ['SUM(AMOUNT)'] },
+      schema, {}
+    ),
+    /function-call syntax used as a plain column name.*SUM\(AMOUNT\)/
+  );
+});
+
+test('a function-call string used inside "where", "groupBy", "orderBy", "having", or "aggregate.col" is rejected the same way', async () => {
+  await assert.rejects(
+    () => executeDescriptor(
+      { entity: 'Orders', select: ['ID'], where: [{ col: 'AVG(AMOUNT)', op: '>', val: 0 }] },
+      schema, {}
+    ),
+    /function-call syntax used as a plain column name/
+  );
+  await assert.rejects(
+    () => executeDescriptor(
+      { entity: 'Orders', select: ['ID'], groupBy: ['COUNT(ID)'] },
+      schema, {}
+    ),
+    /function-call syntax used as a plain column name/
+  );
+  await assert.rejects(
+    () => executeDescriptor(
+      { entity: 'Orders', select: ['ID'], aggregate: [{ fn: 'sum', col: 'SUM(AMOUNT)', as: 'n' }] },
+      schema, {}
+    ),
+    /function-call syntax used as a plain column name/
+  );
+});
+
 test('"expand" combined with "aggregate"/"having" is rejected — contradictory row shapes', async () => {
   await assert.rejects(
     () => executeDescriptor(
