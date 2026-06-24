@@ -787,6 +787,41 @@ async function executeDescriptor(descriptor, schema, callConfig = {}) {
     return executeHierarchy(hierarchy, entityDef, schema, select, allBlocked, effectiveLimit, serverCfg);
   }
 
+  // Found via real NL testing (Banking-Sentinel, "total loan amount across all
+  // customers"): an LLM occasionally puts a function-call string like "SUM(AMOUNT)"
+  // directly into a plain column-spec field instead of using "aggregate"/"having".
+  // colRef() then treats the whole string as a literal column name, and HANA
+  // rejects it with a cryptic "invalid column name: SUM(AMOUNT)" — or, worse, if a
+  // column named exactly that somehow existed, it would silently produce a
+  // meaningless result. There is no retry/self-correction loop around the LLM
+  // planning call, so this reached the caller as a flat failure every time it
+  // happened. Reject up front, across every field a column-spec string can appear
+  // in, with a message that names the actual fix instead of letting the native
+  // HANA error surface.
+  // Broadened from an exact "FUNC(...)" match after a second real failure: an LLM
+  // produced "SUM(AMOUNT) AS TOTAL_AMOUNT" (a full SQL fragment, alias included),
+  // which doesn't match a string that must *end* right after the closing paren.
+  // A plain column name or dotted association path never legitimately contains a
+  // parenthesis at all, so checking for "(" or ")" anywhere is both safe (no valid
+  // false positives) and catches every variant of this mistake, not just one shape.
+  const looksLikeFuncCall = s => typeof s === 'string' && /[()]/.test(s);
+  const badFuncCallSpecs = [
+    ...(select || []).filter(looksLikeFuncCall),
+    ...collectWhereCols(where).filter(looksLikeFuncCall),
+    ...(groupBy || []).filter(looksLikeFuncCall),
+    ...(orderBy && looksLikeFuncCall(orderBy) ? [orderBy] : []),
+    ...(having || []).map(h => h.col).filter(looksLikeFuncCall),
+    ...(aggregate || []).map(a => a.col).filter(looksLikeFuncCall),
+  ];
+  if (badFuncCallSpecs.length) {
+    throw new Error(
+      `Found function-call syntax used as a plain column name: ${[...new Set(badFuncCallSpecs)].join(', ')}. ` +
+      `Column specs must be plain column names (or "assoc.COLUMN" paths) — never a function call. ` +
+      `Use the "aggregate" field for sum/count/avg/min/max, e.g. ` +
+      `{"aggregate": [{"fn": "sum", "col": "AMOUNT", "as": "total"}]}, and "having" to filter on an aggregate value.`
+    );
+  }
+
   if (expand?.length) validateExpandNesting(expand, entityDef, schema, false);
 
   // groupBy/orderBy are passed to cds.ql's builder as plain path strings — it does
