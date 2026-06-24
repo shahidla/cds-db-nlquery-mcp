@@ -592,7 +592,7 @@ Same architectural promise as before: the LLM picks which of these to use and fi
 ## Built by Testing Against Real HANA, Not Just an In-Memory Database
 
 Here's the part most "look what my MCP server can do" posts skip: a comprehensive
-unit test suite (123 tests) passed the entire time these capabilities were
+unit test suite (126 tests) passed the entire time these capabilities were
 broken in a specific, real way. The tests used an in-memory SQLite-style adapter
 that tolerates things real HANA doesn't. The only way to actually know whether
 this worked was to deploy the demo schema to a real HANA Cloud instance and run
@@ -622,6 +622,19 @@ extended session, and it caught real bugs:
   adapter both render properly) — only the legacy runtime mishandles it. The
   server now detects which adapter is connected and only restricts behavior on
   the legacy one; on a modern adapter, the same query just works.
+- A genuinely production question — Banking Sentinel's own "what is the total
+  loan amount across all customers?" — surfaced that the planning LLM
+  occasionally puts a function-call string like `"SUM(AMOUNT)"` directly into
+  `select`, instead of using the `aggregate` field. The column-ref builder then
+  treated the whole string as a literal column name, and HANA rejected it with
+  a cryptic `invalid column name: SUM(AMOUNT)`. A second real failure on the
+  same question widened the same mistake to a full SQL fragment with a trailing
+  alias (`"SUM(AMOUNT) AS TOTAL_AMOUNT"`), which an exact-match pattern didn't
+  catch. Both are now rejected up front — across every field a column-spec
+  string can appear in (`select`, `where`, `groupBy`, `orderBy`, `having.col`,
+  `aggregate.col`) — with a message that names the actual fix, instead of
+  reaching HANA as a cryptic failure or, worse, silently returning a wrong
+  total.
 
 Every one of these was found, root-caused, and fixed by actually deploying
 `examples/capability-demo/`'s schema to live HANA and running real queries

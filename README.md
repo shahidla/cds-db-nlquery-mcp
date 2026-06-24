@@ -410,7 +410,7 @@ the repo if you want it. See that folder's own README for details.
 
 ## How releases are tested
 
-`npm test` (123 unit tests) runs against a mocked database — fast, but it can't
+`npm test` (126 unit tests) runs against a mocked database — fast, but it can't
 catch backend-specific behavior (a real HANA deployment has rejected things the
 mocks happily accepted, more than once). Before tagging a release, `npm run
 test:deployment` is run against a real CAP project connected to live HANA
