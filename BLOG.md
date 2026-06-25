@@ -2,7 +2,7 @@
 
 **An MCP server that turns plain-English questions into CDS queries against your SAP CAP database layer, using schema annotations to resolve JOINs and disambiguate values.**
 
-[GitHub](https://github.com/shahidla/cds-db-nlquery-mcp) · [npm](https://www.npmjs.com/package/@shahid.la/cds-db-nlquery-mcp) · [MCP Registry](https://registry.modelcontextprotocol.io/?search=cds-db-nlquery-mcp)
+[GitHub](https://github.com/shahidla/cds-db-nlquery-mcp) · [npm](https://www.npmjs.com/package/@shahid.la/cds-db-nlquery-mcp) · [MCP Registry](https://registry.modelcontextprotocol.io/?q=cds-db-nlquery-mcp)
 
 If you work with SAP CAP projects: a business question comes in, you open your SQL editor, figure out which tables hold the answer, and work out the JOINs and filter conditions. Ask a slightly different question and you start over.
 
@@ -644,6 +644,6 @@ Add the `.mcp.json` block above, point it at a CAP project with a few `@NLP.labe
 
 Want to verify all of this yourself before trusting it with something that matters, rather than trusting this post? Clone the repo, deploy `examples/capability-demo/`'s schema to your own database, and run `validate-deployment.js`, `ask.js`, `ask-batch.js`, and `smoke-test-server.js`, the same scripts that found and confirmed every fix described above.
 
-Find the project on **[GitHub](https://github.com/shahidla/cds-db-nlquery-mcp)**, **[npm](https://www.npmjs.com/package/@shahid.la/cds-db-nlquery-mcp)**, and the **[MCP Registry](https://registry.modelcontextprotocol.io/?search=cds-db-nlquery-mcp)**.
+Find the project on **[GitHub](https://github.com/shahidla/cds-db-nlquery-mcp)**, **[npm](https://www.npmjs.com/package/@shahid.la/cds-db-nlquery-mcp)**, and the **[MCP Registry](https://registry.modelcontextprotocol.io/?q=cds-db-nlquery-mcp)**.
 
 Feedback, issues, and PRs welcome, especially real-world schema patterns and annotation edge cases.

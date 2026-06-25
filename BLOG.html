@@ -60,7 +60,7 @@
 <body>
 <h1>Natural Language Queries for SAP CAP via MCP: The LLM Translates, CDS Executes</h1>
 <p><strong>An MCP server that turns plain-English questions into CDS queries against your SAP CAP database layer, using schema annotations to resolve JOINs and disambiguate values.</strong></p>
-<p><a href="https://github.com/shahidla/cds-db-nlquery-mcp">GitHub</a> · <a href="https://www.npmjs.com/package/@shahid.la/cds-db-nlquery-mcp">npm</a> · <a href="https://registry.modelcontextprotocol.io/?search=cds-db-nlquery-mcp">MCP Registry</a></p>
+<p><a href="https://github.com/shahidla/cds-db-nlquery-mcp">GitHub</a> · <a href="https://www.npmjs.com/package/@shahid.la/cds-db-nlquery-mcp">npm</a> · <a href="https://registry.modelcontextprotocol.io/?q=cds-db-nlquery-mcp">MCP Registry</a></p>
 <p>If you work with SAP CAP projects: a business question comes in, you open your SQL editor, figure out which tables hold the answer, and work out the JOINs and filter conditions. Ask a slightly different question and you start over.</p>
 <p>This MCP server lets you ask the question directly instead.</p>
 <pre><code>Which customers have a DTI ratio above 5?
@@ -559,6 +559,6 @@ ID : O5   Customer : C3 (Initech)      Amount :  150.00
 </code></pre>
 <p>Add the <code>.mcp.json</code> block above, point it at a CAP project with a few <code>@NLP.label</code> annotations, and ask it something you&#39;d otherwise have opened a SQL editor for.</p>
 <p>Want to verify all of this yourself before trusting it with something that matters, rather than trusting this post? Clone the repo, deploy <code>examples/capability-demo/</code>&#39;s schema to your own database, and run <code>validate-deployment.js</code>, <code>ask.js</code>, <code>ask-batch.js</code>, and <code>smoke-test-server.js</code>, the same scripts that found and confirmed every fix described above.</p>
-<p>Find the project on <strong><a href="https://github.com/shahidla/cds-db-nlquery-mcp">GitHub</a></strong>, <strong><a href="https://www.npmjs.com/package/@shahid.la/cds-db-nlquery-mcp">npm</a></strong>, and the <strong><a href="https://registry.modelcontextprotocol.io/?search=cds-db-nlquery-mcp">MCP Registry</a></strong>.</p>
+<p>Find the project on <strong><a href="https://github.com/shahidla/cds-db-nlquery-mcp">GitHub</a></strong>, <strong><a href="https://www.npmjs.com/package/@shahid.la/cds-db-nlquery-mcp">npm</a></strong>, and the <strong><a href="https://registry.modelcontextprotocol.io/?q=cds-db-nlquery-mcp">MCP Registry</a></strong>.</p>
 <p>Feedback, issues, and PRs welcome, especially real-world schema patterns and annotation edge cases.</p>
 </body></html>
