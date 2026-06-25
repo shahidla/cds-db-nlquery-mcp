@@ -60,6 +60,7 @@
 <body>
 <h1>Natural Language Queries for SAP CAP via MCP: The LLM Translates, CDS Executes</h1>
 <p><strong>An MCP server that turns plain-English questions into CDS queries against your SAP CAP database layer, using schema annotations to resolve JOINs and disambiguate values.</strong></p>
+<p><a href="https://github.com/shahidla/cds-db-nlquery-mcp">GitHub</a> · <a href="https://www.npmjs.com/package/@shahid.la/cds-db-nlquery-mcp">npm</a> · <a href="https://registry.modelcontextprotocol.io/?search=cds-db-nlquery-mcp">MCP Registry</a></p>
 <p>If you work with SAP CAP projects: a business question comes in, you open your SQL editor, figure out which tables hold the answer, and work out the JOINs and filter conditions. Ask a slightly different question and you start over.</p>
 <p>This MCP server lets you ask the question directly instead.</p>
 <pre><code>Which customers have a DTI ratio above 5?
@@ -265,7 +266,7 @@ WorkAssignments [WorkAssignments] [temporal: valid from validFrom to validTo]
 <p>Entity names, column types, NLP labels, enum values with the auto-<code>STATUS_text</code> instruction, join cardinality, the <code>{self-referencing: hierarchy}</code> marker that enables hierarchy traversal, and the <code>[temporal: ...]</code> marker that enables <code>asOf</code> time-travel reads. The LLM doesn&#39;t infer any of this from column names. It reads it directly from what the schema reader extracted.</p>
 <hr>
 <h2>Three Real Examples</h2>
-<p>These run against the actual schema and seed data of <a href="https://github.com/shahidla/Banking-Sentinel">Banking Sentinel</a>, a demo SAP CAP + HANA Cloud project I use to exercise this package against a real, non-trivial schema (18 entities, multi-hop associations, coded value-help tables). Every descriptor and result below reflects that real schema. Nothing is invented for the post.</p>
+<p>These run against the actual schema and seed data of <a href="https://github.com/shahidla/Banking-Sentinel">Banking Sentinel</a> (<a href="https://community.sap.com/t5/technology-blog-posts-by-sap/banking-sentinel-a-multi-agent-credit-risk-copilot-on-sap-btp-built-on-a/ba-p/14426538">writeup</a>), a demo SAP CAP + HANA Cloud project I use to exercise this package against a real, non-trivial schema (18 entities, multi-hop associations, coded value-help tables). Every descriptor and result below reflects that real schema. Nothing is invented for the post.</p>
 <hr>
 <h3>Example 1: Simple Filter Across One Association</h3>
 <p><strong>Question:</strong> <em>&quot;Which customers have a DTI ratio above 5?&quot;</em></p>
@@ -426,7 +427,7 @@ Collateral Breakdown:
   Property: AUD 2,000,000.00
   Cash: AUD 400,000.00
 
-[+ 2 more loans from the wider training portfolio, outside the named demo customers]
+[+ 3 more collateral rows across 2 loans from the wider training portfolio, outside the named demo customers]
 </code></pre>
 <p>This example is the most demanding of the three: it resolves a coded value-help table and performs a column-to-column comparison across an association path, which requires the framework, not the LLM, to understand JOIN semantics. And the per-asset-not-per-loan result is itself a useful, honest reminder of what the descriptor format can and can&#39;t express today: it has no <code>SUM</code>/<code>GROUP BY</code>, so &quot;is this loan&#39;s <em>combined</em> collateral sufficient&quot; is a question for the LLM answering over the raw rows, not something the query itself computes.</p>
 <hr>
@@ -558,6 +559,6 @@ ID : O5   Customer : C3 (Initech)      Amount :  150.00
 </code></pre>
 <p>Add the <code>.mcp.json</code> block above, point it at a CAP project with a few <code>@NLP.label</code> annotations, and ask it something you&#39;d otherwise have opened a SQL editor for.</p>
 <p>Want to verify all of this yourself before trusting it with something that matters, rather than trusting this post? Clone the repo, deploy <code>examples/capability-demo/</code>&#39;s schema to your own database, and run <code>validate-deployment.js</code>, <code>ask.js</code>, <code>ask-batch.js</code>, and <code>smoke-test-server.js</code>, the same scripts that found and confirmed every fix described above.</p>
-<p>Find the project on <strong><a href="https://github.com/shahidla/cds-db-nlquery-mcp">GitHub</a></strong> and <strong><a href="https://www.npmjs.com/package/@shahid.la/cds-db-nlquery-mcp">npm</a></strong>.</p>
+<p>Find the project on <strong><a href="https://github.com/shahidla/cds-db-nlquery-mcp">GitHub</a></strong>, <strong><a href="https://www.npmjs.com/package/@shahid.la/cds-db-nlquery-mcp">npm</a></strong>, and the <strong><a href="https://registry.modelcontextprotocol.io/?search=cds-db-nlquery-mcp">MCP Registry</a></strong>.</p>
 <p>Feedback, issues, and PRs welcome, especially real-world schema patterns and annotation edge cases.</p>
 </body></html>

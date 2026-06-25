@@ -1,6 +1,7 @@
 {
   "name": "@shahid.la/cds-db-nlquery-mcp",
-  "version": "0.7.2",
+  "version": "0.7.3",
+  "mcpName": "io.github.shahidla/cds-db-nlquery-mcp",
   "description": "MCP server for natural language queries against CDS db-layer entities. Targets raw db/schema.cds entities via cds.run() with real SQL JOINs — bring your own LLM (Anthropic, OpenAI, or any OpenAI-compatible endpoint).",
   "main": "src/mcp-server.js",
   "bin": {
@@ -17,14 +18,23 @@
   },
   "keywords": [
     "mcp",
+    "mcp-server",
+    "model-context-protocol",
     "sap",
+    "sap-cap",
     "cap",
     "cds",
     "hana",
     "natural-language",
     "nlquery",
-    "db-layer",
-    "model-context-protocol"
+    "nl2sql",
+    "text-to-sql",
+    "llm",
+    "claude",
+    "anthropic",
+    "openai",
+    "ai-agent",
+    "db-layer"
   ],
   "author": "Shahid",
   "license": "MIT",

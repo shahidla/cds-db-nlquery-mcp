@@ -2,6 +2,8 @@
 
 **An MCP server that turns plain-English questions into CDS queries against your SAP CAP database layer, using schema annotations to resolve JOINs and disambiguate values.**
 
+[GitHub](https://github.com/shahidla/cds-db-nlquery-mcp) · [npm](https://www.npmjs.com/package/@shahid.la/cds-db-nlquery-mcp) · [MCP Registry](https://registry.modelcontextprotocol.io/?search=cds-db-nlquery-mcp)
+
 If you work with SAP CAP projects: a business question comes in, you open your SQL editor, figure out which tables hold the answer, and work out the JOINs and filter conditions. Ask a slightly different question and you start over.
 
 This MCP server lets you ask the question directly instead.
@@ -246,7 +248,7 @@ Entity names, column types, NLP labels, enum values with the auto-`STATUS_text` 
 
 ## Three Real Examples
 
-These run against the actual schema and seed data of [Banking Sentinel](https://github.com/shahidla/Banking-Sentinel), a demo SAP CAP + HANA Cloud project I use to exercise this package against a real, non-trivial schema (18 entities, multi-hop associations, coded value-help tables). Every descriptor and result below reflects that real schema. Nothing is invented for the post.
+These run against the actual schema and seed data of [Banking Sentinel](https://github.com/shahidla/Banking-Sentinel) ([writeup](https://community.sap.com/t5/technology-blog-posts-by-sap/banking-sentinel-a-multi-agent-credit-risk-copilot-on-sap-btp-built-on-a/ba-p/14426538)), a demo SAP CAP + HANA Cloud project I use to exercise this package against a real, non-trivial schema (18 entities, multi-hop associations, coded value-help tables). Every descriptor and result below reflects that real schema. Nothing is invented for the post.
 
 ---
 
@@ -450,7 +452,7 @@ Collateral Breakdown:
   Property: AUD 2,000,000.00
   Cash: AUD 400,000.00
 
-[+ 2 more loans from the wider training portfolio, outside the named demo customers]
+[+ 3 more collateral rows across 2 loans from the wider training portfolio, outside the named demo customers]
 ```
 
 This example is the most demanding of the three: it resolves a coded value-help table and performs a column-to-column comparison across an association path, which requires the framework, not the LLM, to understand JOIN semantics. And the per-asset-not-per-loan result is itself a useful, honest reminder of what the descriptor format can and can't express today: it has no `SUM`/`GROUP BY`, so "is this loan's *combined* collateral sufficient" is a question for the LLM answering over the raw rows, not something the query itself computes.
@@ -642,6 +644,6 @@ Add the `.mcp.json` block above, point it at a CAP project with a few `@NLP.labe
 
 Want to verify all of this yourself before trusting it with something that matters, rather than trusting this post? Clone the repo, deploy `examples/capability-demo/`'s schema to your own database, and run `validate-deployment.js`, `ask.js`, `ask-batch.js`, and `smoke-test-server.js`, the same scripts that found and confirmed every fix described above.
 
-Find the project on **[GitHub](https://github.com/shahidla/cds-db-nlquery-mcp)** and **[npm](https://www.npmjs.com/package/@shahid.la/cds-db-nlquery-mcp)**.
+Find the project on **[GitHub](https://github.com/shahidla/cds-db-nlquery-mcp)**, **[npm](https://www.npmjs.com/package/@shahid.la/cds-db-nlquery-mcp)**, and the **[MCP Registry](https://registry.modelcontextprotocol.io/?search=cds-db-nlquery-mcp)**.
 
 Feedback, issues, and PRs welcome, especially real-world schema patterns and annotation edge cases.
